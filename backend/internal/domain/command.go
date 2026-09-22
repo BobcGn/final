@@ -8,15 +8,15 @@ import (
 // CommandType is the kind of control command sent to a device.
 type CommandType string
 
-// Frozen control command types.
+// Frozen control command types. Remote mute (set_mute) was removed; the control
+// topic only carries set_thresholds.
 const (
-	CommandSetMute       CommandType = "set_mute"
 	CommandSetThresholds CommandType = "set_thresholds"
 )
 
 // Valid reports whether t is a frozen command type.
 func (t CommandType) Valid() bool {
-	return t == CommandSetMute || t == CommandSetThresholds
+	return t == CommandSetThresholds
 }
 
 // CommandState is the lifecycle state the backend records for a control command.
@@ -136,8 +136,6 @@ func (c AckErrorCode) Valid() bool {
 // CommandPayload carries the type-specific fields of a control command. Exactly
 // one member is populated, selected by the owning Command's Type.
 type CommandPayload struct {
-	// Muted is set for set_mute.
-	Muted *bool
 	// Thresholds is set for set_thresholds.
 	Thresholds *Thresholds
 	// ThresholdVersion is the version the device must adopt for set_thresholds.
@@ -187,10 +185,6 @@ func (c Command) Validate() error {
 		return fmt.Errorf("%w: unknown state %q", ErrInvalidCommand, c.State)
 	}
 	switch c.Type {
-	case CommandSetMute:
-		if c.Payload.Muted == nil {
-			return fmt.Errorf("%w: %s requires payload.muted", ErrInvalidCommand, c.Type)
-		}
 	case CommandSetThresholds:
 		if c.Payload.Thresholds == nil {
 			return fmt.Errorf("%w: %s requires payload.thresholds", ErrInvalidCommand, c.Type)

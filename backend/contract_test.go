@@ -223,8 +223,8 @@ func TestDeviceProtocolExamplesDecode(t *testing.T) {
 	}
 
 	examples := fencedBlocks(string(raw), "json")
-	if len(examples) < 4 {
-		t.Fatalf("%s holds %d JSON examples; expected at least the telemetry, control and acknowledgement payloads", deviceProtocolPath, len(examples))
+	if len(examples) < 3 {
+		t.Fatalf("%s holds %d JSON examples; expected the telemetry, control and acknowledgement payloads", deviceProtocolPath, len(examples))
 	}
 
 	kinds := map[string]int{}
@@ -422,8 +422,7 @@ func TestWebSocketRouteIsMarkedAsAnUpgrade(t *testing.T) {
 func TestControlRoutesRequireIdempotencyKey(t *testing.T) {
 	document := loadOpenAPI(t)
 	routes := map[string][]string{
-		"/api/v1/devices/{deviceId}/thresholds":    {"put"},
-		"/api/v1/devices/{deviceId}/commands/mute": {"post"},
+		"/api/v1/devices/{deviceId}/thresholds": {"put"},
 	}
 	for path, verbs := range routes {
 		for _, verb := range verbs {

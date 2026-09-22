@@ -100,7 +100,6 @@ module.exports = {
   settings: call('settings'),
   commandStatus: call('commandStatus'),
   awaitCommandOutcome: call('awaitCommandOutcome'),
-  mute: call('mute'),
   updateThresholds: call('updateThresholds'),
   /**
    * The selector option lists, as a JSON string.

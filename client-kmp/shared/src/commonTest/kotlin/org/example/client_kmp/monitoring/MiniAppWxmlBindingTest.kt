@@ -28,7 +28,6 @@ class MiniAppWxmlBindingTest {
                 alarmState = AlertState.fire_warning,
                 lastSeenAt = "2026-09-21T09:00:00Z",
                 localAlarm = true,
-                buzzerMuted = true,
             ),
             TelemetryPoint(
                 deviceId = "MCU001",
@@ -39,18 +38,17 @@ class MiniAppWxmlBindingTest {
                 gasAdcFiltered = 880,
                 gasPpm = 180.0,
                 localAlarm = true,
-                buzzerMuted = true,
             ),
         )
 
         assertHasAll(
             keysOf(client.encodeDashboard(view)),
-            // risk block, the three meters, the device card and the mute button
+            // risk block, the three meters and the device card
             "riskTone", "riskText", "riskDetail", "connectivityText", "online", "hasData",
             "temperatureText", "temperaturePercent",
             "humidityText", "humidityPercent",
             "gasText", "gasPercent",
-            "deviceId", "localAlarm", "localAlarmText", "buzzerText", "buzzerMuted", "updatedAt",
+            "deviceId", "localAlarm", "localAlarmText", "buzzerText", "updatedAt",
         )
     }
 

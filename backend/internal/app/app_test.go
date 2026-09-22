@@ -163,7 +163,7 @@ func TestRunIngestsFromABrokerAndControlsBack(t *testing.T) {
 		"bootId": "9f3ac21b", "sequence": 1, "timestamp": nil, "uptimeMs": 1000,
 		"temperatureC": 28.0, "humidityRh": 61.0, "gasAdcRaw": 1350,
 		"gasAdcFiltered": 1328, "gasPpm": 25.0, "gasCalibrated": false,
-		"localAlarm": true, "alarmCauses": []string{"gas_high"}, "buzzerMuted": false,
+		"localAlarm": true, "alarmCauses": []string{"gas_high"},
 		"network": "online", "thresholdVersion": 1, "sensorFault": false,
 	}
 	payload, err := json.Marshal(sample)
@@ -197,8 +197,8 @@ func TestRunIngestsFromABrokerAndControlsBack(t *testing.T) {
 	}
 
 	// A control command issued over REST must reach the device on its topic.
-	request, err := http.NewRequest(http.MethodPost, base+"/api/v1/devices/MCU001/commands/mute",
-		strings.NewReader(`{"muted":true}`))
+	request, err := http.NewRequest(http.MethodPut, base+"/api/v1/devices/MCU001/thresholds",
+		strings.NewReader(`{"temperatureHighC":36,"humidityHighRh":85,"gasHighPpm":120}`))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -206,12 +206,12 @@ func TestRunIngestsFromABrokerAndControlsBack(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "01IDEMPOTENCY")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		t.Fatalf("mute request: %v", err)
+		t.Fatalf("threshold request: %v", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("mute status = %d, want 202: %s", response.StatusCode, body)
+		t.Fatalf("threshold status = %d, want 202: %s", response.StatusCode, body)
 	}
 
 	controlPayload := waitForControl(t, delivered)
@@ -219,10 +219,10 @@ func TestRunIngestsFromABrokerAndControlsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the delivered control payload does not satisfy the device contract: %v", err)
 	}
-	if decoded.Type != domain.CommandSetMute {
+	if decoded.Type != domain.CommandSetThresholds {
 		t.Fatalf("delivered type = %q", decoded.Type)
 	}
-	if decoded.Payload.Muted == nil || !*decoded.Payload.Muted {
+	if decoded.Payload.Thresholds == nil {
 		t.Fatalf("delivered payload = %+v", decoded.Payload)
 	}
 
@@ -416,9 +416,10 @@ func TestRunSweeperExpiresUnacknowledgedCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new command service: %v", err)
 	}
-	accepted, err := commandService.RequestMute(context.Background(), "MCU001", true, "01IDEM", "operator")
+	accepted, err := commandService.RequestThresholdUpdate(context.Background(), "MCU001",
+		domain.Thresholds{TemperatureHighC: 30, HumidityHighRh: 80, GasHighPpm: 80}, "01IDEM", "operator")
 	if err != nil {
-		t.Fatalf("request mute: %v", err)
+		t.Fatalf("request thresholds: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -534,7 +535,7 @@ func TestNewBrokerClientSubscribesToTheDeviceTopics(t *testing.T) {
 	payload := fmt.Sprintf(`{"schemaVersion":1,"messageType":"telemetry","deviceId":"MCU001",` +
 		`"bootId":"9f3ac21b","sequence":1,"timestamp":null,"uptimeMs":1000,"temperatureC":28,` +
 		`"humidityRh":61,"gasAdcRaw":1350,"gasAdcFiltered":1328,"gasPpm":25,"gasCalibrated":false,` +
-		`"localAlarm":false,"alarmCauses":[],"buzzerMuted":false,"network":"online",` +
+		`"localAlarm":false,"alarmCauses":[],"network":"online",` +
 		`"thresholdVersion":1,"sensorFault":false}`)
 	if err := publisher.publish(ctx, broker, payload); err != nil {
 		t.Fatalf("publish telemetry: %v", err)

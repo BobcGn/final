@@ -96,7 +96,6 @@ func TestDataBuildersCarryEveryField(t *testing.T) {
 		GasCalibrated:    false,
 		LocalAlarm:       true,
 		AlarmCauses:      []domain.AlarmCause{domain.AlarmGasHigh},
-		BuzzerMuted:      false,
 		Network:          domain.NetworkOnline,
 		ThresholdVersion: 3,
 		SensorFault:      false,
@@ -116,7 +115,7 @@ func TestDataBuildersCarryEveryField(t *testing.T) {
 	if data.GasPpm == nil || *data.GasPpm != gas {
 		t.Fatalf("gasPpm was not carried: %+v", data.GasPpm)
 	}
-	if !data.LocalAlarm || data.BuzzerMuted != sample.BuzzerMuted || data.SensorFault != sample.SensorFault {
+	if !data.LocalAlarm || data.SensorFault != sample.SensorFault {
 		t.Fatalf("flags were not carried: %+v", data)
 	}
 	if len(data.AlarmCauses) != 1 || data.AlarmCauses[0] != domain.AlarmGasHigh {
@@ -150,12 +149,11 @@ func TestDataBuildersCarryEveryField(t *testing.T) {
 		t.Fatalf("the evidence was not carried: %+v", alertData.Evidence)
 	}
 
-	muted := true
 	version := 4
 	command := domain.Command{
 		RequestID: "01REQ", DeviceID: "MCU001", Type: domain.CommandSetThresholds,
 		State:          domain.CommandApplied,
-		Payload:        domain.CommandPayload{Muted: &muted, ThresholdVersion: &version},
+		Payload:        domain.CommandPayload{ThresholdVersion: &version},
 		AcceptedAt:     instant,
 		ExpiresAt:      instant.Add(time.Minute),
 		DesiredVersion: &version,

@@ -225,57 +225,6 @@ func TestIdempotency(t *testing.T) {
 	}
 }
 
-// TestMuteIdempotency verifies the same rule on the mute route.
-func TestMuteIdempotency(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-
-	first, err := h.service.RequestMute(ctx, "MCU001", true, "01IDEM", "operator")
-	if err != nil {
-		t.Fatalf("mute: %v", err)
-	}
-	if first.Payload.Muted == nil || !*first.Payload.Muted {
-		t.Fatalf("payload = %+v", first.Payload)
-	}
-
-	replay, err := h.service.RequestMute(ctx, "MCU001", true, "01IDEM", "operator")
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
-	if replay.RequestID != first.RequestID || h.publisher.count() != 1 {
-		t.Fatalf("replay produced %s with %d publishes", replay.RequestID, h.publisher.count())
-	}
-
-	if _, err := h.service.RequestMute(ctx, "MCU001", false, "01IDEM", "operator"); !errors.Is(err, command.ErrIdempotencyConflict) {
-		t.Fatalf("reused key with the opposite value returned %v", err)
-	}
-}
-
-// TestMuteCarriesNoAlarmClearingState verifies that a mute command carries only
-// the mute flag. Clearing an alarm is not something the control plane can
-// express, which is what keeps the local alarm authoritative.
-func TestMuteCarriesNoAlarmClearingState(t *testing.T) {
-	h := newHarness(t)
-
-	if _, err := h.service.RequestMute(context.Background(), "MCU001", true, "01IDEM", "operator"); err != nil {
-		t.Fatalf("mute: %v", err)
-	}
-
-	decoded, err := protocol.DecodeControl(h.publisher.last(t), start)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if decoded.Type != domain.CommandSetMute {
-		t.Fatalf("type = %q, want set_mute", decoded.Type)
-	}
-	if decoded.Payload.Muted == nil || !*decoded.Payload.Muted {
-		t.Fatalf("payload = %+v", decoded.Payload)
-	}
-	if decoded.Payload.Thresholds != nil {
-		t.Fatal("a mute command carried thresholds")
-	}
-}
-
 // TestValidationRejectsBadRequests covers the request guards.
 func TestValidationRejectsBadRequests(t *testing.T) {
 	h := newHarness(t)
@@ -293,10 +242,6 @@ func TestValidationRejectsBadRequests(t *testing.T) {
 		"threshold out of range": func() error {
 			_, err := h.service.RequestThresholdUpdate(ctx, "MCU001",
 				domain.Thresholds{TemperatureHighC: 200, HumidityHighRh: 80, GasHighPpm: 80}, "01IDEM", "operator")
-			return err
-		},
-		"mute without a key": func() error {
-			_, err := h.service.RequestMute(ctx, "MCU001", true, "", "operator")
 			return err
 		},
 	}
@@ -440,7 +385,7 @@ func TestDuplicateAckIsIdempotent(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	accepted, err := h.service.RequestMute(ctx, "MCU001", true, "01IDEM", "operator")
+	accepted, err := h.service.RequestThresholdUpdate(ctx, "MCU001", desiredThresholds, "01IDEM", "operator")
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -475,7 +420,7 @@ func TestLateAckIsIgnored(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	accepted, err := h.service.RequestMute(ctx, "MCU001", true, "01IDEM", "operator")
+	accepted, err := h.service.RequestThresholdUpdate(ctx, "MCU001", desiredThresholds, "01IDEM", "operator")
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -526,7 +471,7 @@ func TestExpiryOnlyClosesUnfinishedCommands(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	applied, err := h.service.RequestMute(ctx, "MCU001", true, "01IDEM", "operator")
+	applied, err := h.service.RequestThresholdUpdate(ctx, "MCU001", desiredThresholds, "01IDEM", "operator")
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -536,7 +481,9 @@ func TestExpiryOnlyClosesUnfinishedCommands(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
-	if _, err := h.service.RequestMute(ctx, "MCU001", false, "01IDEM2", "operator"); err != nil {
+	second := desiredThresholds
+	second.TemperatureHighC++
+	if _, err := h.service.RequestThresholdUpdate(ctx, "MCU001", second, "01IDEM2", "operator"); err != nil {
 		t.Fatalf("second request: %v", err)
 	}
 

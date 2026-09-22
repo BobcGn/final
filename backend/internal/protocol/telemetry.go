@@ -17,7 +17,7 @@ var errMissing = fmt.Errorf("required field is absent")
 var telemetryKeys = keySet(
 	"schemaVersion", "messageType", "deviceId", "bootId", "sequence", "timestamp",
 	"uptimeMs", "temperatureC", "humidityRh", "gasAdcRaw", "gasAdcFiltered",
-	"gasPpm", "gasCalibrated", "localAlarm", "alarmCauses", "buzzerMuted",
+	"gasPpm", "gasCalibrated", "localAlarm", "alarmCauses",
 	"network", "thresholdVersion", "sensorFault",
 )
 
@@ -49,7 +49,6 @@ type telemetryPayload struct {
 	GasCalibrated    *bool     `json:"gasCalibrated"`
 	LocalAlarm       *bool     `json:"localAlarm"`
 	AlarmCauses      *[]string `json:"alarmCauses"`
-	BuzzerMuted      *bool     `json:"buzzerMuted"`
 	Network          string    `json:"network"`
 	ThresholdVersion *int      `json:"thresholdVersion"`
 	SensorFault      *bool     `json:"sensorFault"`
@@ -74,7 +73,7 @@ func DecodeTelemetry(raw []byte, expectedDeviceID string, receivedAt time.Time) 
 	if missing := requireKeys(keys, []string{
 		"schemaVersion", "messageType", "deviceId", "bootId", "sequence", "timestamp",
 		"uptimeMs", "temperatureC", "humidityRh", "gasAdcRaw", "gasAdcFiltered",
-		"gasCalibrated", "localAlarm", "alarmCauses", "buzzerMuted", "network",
+		"gasCalibrated", "localAlarm", "alarmCauses", "network",
 		"thresholdVersion", "sensorFault",
 	}); missing != "" {
 		return domain.Telemetry{}, newDecodeError(ReasonMissingField, missing, errMissing)
@@ -112,7 +111,6 @@ func DecodeTelemetry(raw []byte, expectedDeviceID string, receivedAt time.Time) 
 		GasCalibrated:    *payload.GasCalibrated,
 		LocalAlarm:       *payload.LocalAlarm,
 		AlarmCauses:      causes,
-		BuzzerMuted:      *payload.BuzzerMuted,
 		Network:          domain.NetworkState(payload.Network),
 		ThresholdVersion: *payload.ThresholdVersion,
 		SensorFault:      *payload.SensorFault,
@@ -157,7 +155,6 @@ func EncodeTelemetry(sample domain.Telemetry) ([]byte, error) {
 		GasCalibrated:    &sample.GasCalibrated,
 		LocalAlarm:       &sample.LocalAlarm,
 		AlarmCauses:      &causes,
-		BuzzerMuted:      &sample.BuzzerMuted,
 		Network:          network,
 		ThresholdVersion: &sample.ThresholdVersion,
 		SensorFault:      &sample.SensorFault,

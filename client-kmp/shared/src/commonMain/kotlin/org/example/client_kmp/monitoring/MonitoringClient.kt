@@ -106,21 +106,6 @@ class MonitoringClient(
     }
 
     /**
-     * Enqueues a buzzer mute or unmute.
-     *
-     * Muting never clears `localAlarm` and never stops sampling; the returned
-     * view is a backend acknowledgement, not a device confirmation.
-     */
-    suspend fun setMuted(muted: Boolean): CommandStatusView {
-        val accepted: CommandAccepted = send(
-            path = "/api/v1/devices/$deviceId/commands/mute",
-            method = "POST",
-            body = json.encodeToString(MuteCommand(muted)),
-        )
-        return MonitoringPresentation.commandAccepted(accepted)
-    }
-
-    /**
      * Validates and enqueues a threshold update.
      *
      * @throws IllegalArgumentException before any network call when a value is

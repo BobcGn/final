@@ -16,7 +16,6 @@ typedef struct
     uint32_t payload_start;
     uint32_t payload_length;
 
-    bool has_muted;
     bool has_threshold_version;
     bool has_temperature_high;
     bool has_humidity_high;
@@ -30,7 +29,6 @@ typedef struct
     uint64_t expires_at;
     char type[24];
 
-    bool muted;
     uint32_t threshold_version;
     /* Threshold values are read in tenths so a fractional value from the client
      * is not silently truncated by the parser; the rounding decision is made
@@ -579,36 +577,6 @@ static bool apply_payload_field(CommandFields *fields, const char *key, Scanner 
     const char *number_start = NULL;
     uint32_t number_length = 0U;
 
-    if (key_equals(key, "muted"))
-    {
-        /* muted is a JSON boolean, not a string. Accepting "true" would let a
-         * client that quoted the value believe it had muted the buzzer. The
-         * whitespace before the literal is skipped first: a pretty-printed
-         * payload puts a space after the colon, and reading from the colon
-         * directly would refuse a perfectly ordinary document. */
-        const char *rest;
-        skip_whitespace(value);
-        rest = &value->text[value->position];
-        uint32_t remaining = value->length - value->position;
-
-        if (remaining >= 4U && rest[0] == 't' && rest[1] == 'r' && rest[2] == 'u' && rest[3] == 'e')
-        {
-            fields->muted = true;
-            value->position += 4U;
-        }
-        else if (remaining >= 5U && rest[0] == 'f' && rest[1] == 'a' && rest[2] == 'l' &&
-                 rest[3] == 's' && rest[4] == 'e')
-        {
-            fields->muted = false;
-            value->position += 5U;
-        }
-        else
-        {
-            return false;
-        }
-        fields->has_muted = true;
-        return true;
-    }
     if (key_equals(key, "thresholdVersion"))
     {
         uint64_t version = 0U;
@@ -845,7 +813,6 @@ CommandResult CommandJsonParse(const char *json, uint32_t length, const char *de
     fields.has_payload = false;
     fields.payload_start = 0U;
     fields.payload_length = 0U;
-    fields.has_muted = false;
     fields.has_threshold_version = false;
     fields.has_temperature_high = false;
     fields.has_humidity_high = false;
@@ -857,7 +824,6 @@ CommandResult CommandJsonParse(const char *json, uint32_t length, const char *de
     fields.issued_at = 0U;
     fields.expires_at = 0U;
     fields.type[0] = '\0';
-    fields.muted = false;
     fields.threshold_version = 0U;
     fields.temperature_high_tenths = 0U;
     fields.humidity_high_tenths = 0U;
@@ -871,10 +837,12 @@ CommandResult CommandJsonParse(const char *json, uint32_t length, const char *de
     {
         return COMMAND_RESULT_MALFORMED;
     }
-    if (!scan_payload_object(json, length, &fields))
-    {
-        return COMMAND_RESULT_MALFORMED;
-    }
+    /* The payload object is scanned only for a recognized type. An unknown type
+     * (the retired set_mute, for example) must be refused as bad_request_type
+     * before its payload fields are interpreted, which is the frozen order in
+     * docs/device-protocol.md §4.1: type is validated before range. Scanning the
+     * payload first would report a mute body as malformed and never answer with
+     * the rejection the contract promises. */
     if (!fields.has_schema_version || !fields.has_message_type || !fields.has_device_id ||
         !fields.has_request_id || !fields.has_issued_at || !fields.has_expires_at ||
         !fields.has_type || !fields.has_payload)
@@ -935,24 +903,14 @@ CommandResult CommandJsonParse(const char *json, uint32_t length, const char *de
     }
 
     if (fields.type[0] == 's' && fields.type[1] == 'e' && fields.type[2] == 't' && fields.type[3] == '_' &&
-        fields.type[4] == 'm' && fields.type[5] == 'u' && fields.type[6] == 't' && fields.type[7] == 'e' &&
-        fields.type[8] == '\0')
-    {
-        if (!fields.has_muted)
-        {
-            return COMMAND_RESULT_REJECTED_RANGE;
-        }
-        command->type = COMMAND_SET_MUTE;
-        command->muted = fields.muted;
-        command->threshold_version = 0U;
-        return COMMAND_RESULT_APPLIED;
-    }
-
-    if (fields.type[0] == 's' && fields.type[1] == 'e' && fields.type[2] == 't' && fields.type[3] == '_' &&
         fields.type[4] == 't' && fields.type[5] == 'h' && fields.type[6] == 'r' && fields.type[7] == 'e' &&
         fields.type[8] == 's' && fields.type[9] == 'h' && fields.type[10] == 'o' && fields.type[11] == 'l' &&
         fields.type[12] == 'd' && fields.type[13] == 's' && fields.type[14] == '\0')
     {
+        if (!scan_payload_object(json, length, &fields))
+        {
+            return COMMAND_RESULT_MALFORMED;
+        }
         if (!fields.has_threshold_version || !fields.has_temperature_high ||
             !fields.has_humidity_high || !fields.has_gas_high)
         {
@@ -1104,7 +1062,7 @@ uint32_t CommandAckJsonEncode(const CommandAckPayload *payload, char *buffer, ui
      * a threshold command must therefore still carry the version in force, because
      * the backend reconciles its record from the acknowledgement and a null there
      * would read as "this device has no threshold configuration". Every other
-     * result — including a mute acknowledgement — carries neither a version nor a
+     * result — carries neither a version nor a
      * claim to have changed one. */
     report_version = (payload->result == COMMAND_RESULT_APPLIED ||
                       payload->result == COMMAND_RESULT_DUPLICATE) &&

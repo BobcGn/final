@@ -158,7 +158,6 @@ func (s *Server) handleDeviceStatus(w http.ResponseWriter, r *http.Request) {
 		DeviceID:            deviceID,
 		Connectivity:        connectivity,
 		AlarmState:          alarmState,
-		BuzzerMuted:         state.BuzzerMuted,
 		LocalAlarm:          state.LocalAlarm,
 		OfflineAfterSeconds: int(s.cfg.OfflineAfter / time.Second),
 		LastSeenAt:          lastSeenPtr,
@@ -345,41 +344,6 @@ func (s *Server) handleUpdateThresholds(w http.ResponseWriter, r *http.Request) 
 		Status:         "pending",
 		DesiredVersion: accepted.DesiredVersion,
 		ExpiresAt:      timestampPtr(&accepted.ExpiresAt),
-	})
-}
-
-// handleMute implements POST /api/v1/devices/{deviceId}/commands/mute.
-func (s *Server) handleMute(w http.ResponseWriter, r *http.Request) {
-	deviceID, err := s.deviceID(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	idempotencyKey, err := requiredIdempotencyKey(r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-
-	var body muteCommandRequest
-	if err := decodeStrictBody(r, &body); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	if body.Muted == nil {
-		s.fail(w, r, newAPIError(http.StatusBadRequest, codeInvalidRequest, "muted is required", map[string]any{"field": "muted"}))
-		return
-	}
-
-	accepted, err := s.cfg.Commands.RequestMute(r.Context(), deviceID, *body.Muted, idempotencyKey, actorFrom(r.Context()))
-	if err != nil {
-		s.fail(w, r, mapCommandError(err))
-		return
-	}
-	writeJSON(w, http.StatusAccepted, commandAcceptedResponse{
-		RequestID: accepted.RequestID,
-		Status:    "pending",
-		ExpiresAt: timestampPtr(&accepted.ExpiresAt),
 	})
 }
 

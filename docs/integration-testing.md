@@ -33,7 +33,7 @@ go test -count=1 -v ./cmd/device-sim/   # 单独看端到端断言
 1. **遥测入链**：模拟设备发布 → 后端入库 → `GET /status` 与 `GET /telemetry/latest` 返回相同数值。
 2. **重复投递只入库一次**：模拟器整帧重发（QoS 1 重投的样子），按 `(deviceId, bootId, sequence)` 断言每个序号只出现一次。
 3. **复合火警双因子**：同一环境内并排跑两台设备——一台只有气体上升、温度平稳，一台两者都上升。只有后者进入 `fire_warning`；并断言证据里两个量都超过各自阈值、样本数达标。**并排跑是关键**：分开跑的话，规则即使只读了一个因子，负例也会通过。
-4. **控制闭环**：REST 下发静音 → 模拟设备收到并执行 → `GET /commands/{requestId}` 从 `pending` 变为 `applied`；静音命令不得报告阈值版本。
+4. **控制闭环**：REST 下发阈值 → 模拟设备收到并执行 → `GET /commands/{requestId}` 从 `pending` 变为 `applied`，并在结果中报告新的 `thresholdVersion`。
 5. **阈值确认**：REST 下发阈值 → 设备采纳新版本 → `GET /thresholds` 的 `desiredVersion` 与 `confirmedVersion` 相等、`confirmationState` 为 `confirmed`。
 6. **幂等**：同一 `Idempotency-Key` 重放不会产生第二条命令，设备只收到一次。
 7. **离线判定**：设备**保持 MQTT 会话连接**但停止上报，超过契约的 15 秒静默后被判 `offline`。保持连接是刻意的——这条断言证明后端依据的是收到的遥测而不是它看不见的 Broker 连接。
@@ -115,12 +115,12 @@ WebSocket 实时流（需要 `wscat` 或任一 WebSocket 客户端）：
 wscat -c ws://localhost:8080/ws/v1/devices/MCU001/telemetry
 ```
 
-控制命令（`Idempotency-Key` 为必需项）：
+控制命令（`Idempotency-Key` 为必需项；控制主题只接受 `set_thresholds`）：
 
 ```sh
-curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
+curl -X PUT 'http://localhost:8080/api/v1/devices/MCU001/thresholds' \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: 01MANUALDEMO' \
-  -d '{"muted":true}'
+  -d '{"temperatureHighC":30.0,"humidityHighRh":80.0,"gasHighPpm":80.0}'
 ```
 
 返回 202 只表示"已接受并发布"。最终结果看 `GET /commands/{requestId}` 或 WebSocket 的 `command.status_changed`。
@@ -134,7 +134,7 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 | 复合火警 | 双因子同时满足才 `fire_warning`；单因子最多 `suspect` |
 | 误报边界 | 记录触发时的证据（`gasAdcRise`、`temperatureRateCPerMinute`、`sampleCount`），并记录调参过程 |
 | 离线与恢复 | 静默超窗判 `offline`，恢复上报立即 `online` 并产生状态事件 |
-| 控制闭环 | 202 后命令经 `published` 到 `applied`；`GET /commands/{requestId}` 可见；静音不报告阈值版本 |
+| 控制闭环 | 202 后命令经 `published` 到 `applied`；`GET /commands/{requestId}` 可见；阈值命令报告新的 `thresholdVersion` |
 | 幂等 | 同一 `Idempotency-Key` 重放，设备只收到一次 |
 | 阈值 | `confirmedVersion` 追上 `desiredVersion` 后 `confirmationState` 为 `confirmed`；超时不回滚 `desiredVersion` |
 | 断网自治 | 拔掉/屏蔽网络后，本地采样、阈值判断、LED 与蜂鸣器继续工作 |
@@ -166,8 +166,8 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 
 `device/control` 的 PUBLISH 已接入主循环。实机证据：
 
-- `POST /commands/mute {muted:true}` → 202 → Backend 记录 `command acknowledgement received … status:"applied"` → 命令资源 `state:"applied"`（accepted→completed 约 1 s）→ 下一次遥测 `buzzerMuted:true` 且 `localAlarm:true`、`alarmCauses` 不变 → OLED 人工确认显示 MUTED。
-- 解除静音同样 `applied`，遥测 `buzzerMuted:false`。
+- `PUT /thresholds` → 202 → Backend 记录 `command acknowledgement received … status:"applied"` → 命令资源 `state:"applied"`（accepted→completed 约 1 s）→ 下一次遥测 `thresholdVersion` 前进到新版本。
+- 旧的 `POST /commands/mute` 已随远程静音能力删除，调用将收到标准 404。
 - `PUT /thresholds` → `applied`、`confirmedVersion` 前进，复位后 Flash 记录仍在（详见 §6 第 3 项）。
 - 停止 EMQX 后设备失去 Broker 但本地报警继续（§6 第 2 项）；重启 EMQX 后设备**无需复位**自行重连并恢复上报（`bootId` 不变、`sequence` 续增）。
 

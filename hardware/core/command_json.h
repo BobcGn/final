@@ -42,7 +42,6 @@
 /* Command types. */
 typedef enum
 {
-    COMMAND_SET_MUTE = 0,
     COMMAND_SET_THRESHOLDS
 } CommandType;
 
@@ -97,8 +96,6 @@ typedef struct
      * command was received. Storing the duration rather than an instant is what
      * makes that possible without a clock. */
     uint32_t window_ms;
-    /* set_mute */
-    bool muted;
     /* set_thresholds */
     uint32_t threshold_version;
     EnvThresholds thresholds;
@@ -180,7 +177,7 @@ typedef struct
     /* Threshold version to report. It is emitted for a threshold command whose
      * result is applied or duplicate — the newly applied version and the version
      * currently in force respectively — and is written as null for every other
-     * combination, including any mute command. Pass 0 to force null. */
+     * combination. Pass 0 to force null. */
     uint32_t threshold_version;
 } CommandAckPayload;
 

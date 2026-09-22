@@ -167,7 +167,7 @@ int main(void)
     }
 
     /* The control path is bound to the monitor and the store before either can be
-     * driven from the radio: the mute command acts on the monitor, and a
+     * driven from the radio: the threshold command acts on the monitor, and a
      * threshold command is published as applied only after this store has written
      * and verified the record. */
     ControlLinkInit(&controlLink, DEVICE_ID, bootId, &monitor, &thresholdStore);
@@ -221,7 +221,7 @@ int main(void)
          * drive the LED, OLED and telemetry. The 200 ms / 800 ms cadence avoids
          * a continuous tone while preserving an unmistakable local warning. The
          * decision itself lives in the monitor so that the audible-cause filter,
-         * the cadence and the mute precedence are covered by the host tests
+         * the cadence and the gas-only audible policy are covered by the host tests
          * rather than only by watching a board. */
         buzzerActive = (uint8_t)(EnvMonitorBuzzerDrive(&evaluation, tick) ? 1U : 0U);
         if (buzzerActive != 0U)
@@ -252,7 +252,6 @@ int main(void)
             /* The driver's own status code travels with the fault, so the panel
              * can say which failure it is instead of only that one happened. */
             display.dht_error = dhtError;
-            display.buzzer_muted = EnvMonitorMuted(&monitor);
             /* Reflect audible alarm status on the display rather than the 200 ms
              * instantaneous cadence pulse, so the OLED does not flash "off" for
              * 800 ms of each second during an active gas alarm. */
@@ -360,7 +359,6 @@ int main(void)
                 telemetry.gas_calibrated = false;
                 telemetry.local_alarm = evaluation.local_alarm;
                 telemetry.alarm_causes = evaluation.alarm_causes;
-                telemetry.buzzer_muted = EnvMonitorMuted(&monitor);
                 telemetry.network_online = true;
                 telemetry.threshold_version = EnvMonitorThresholdVersion(&monitor);
                 telemetry.sensor_fault = ((evaluation.alarm_causes & ENV_ALARM_SENSOR_FAULT) != 0U);

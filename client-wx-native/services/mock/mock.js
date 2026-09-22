@@ -17,7 +17,6 @@ const state = {
   temperatureC: 27.6,
   humidityRh: 60.5,
   gasPpm: 25.0,
-  buzzerMuted: false,
   thresholds: { temperatureHighC: 30.0, gasHighPpm: 80.0 },
   desiredVersion: 4,
   confirmedVersion: 4,
@@ -79,7 +78,6 @@ function buildTelemetry(deviceId, advanceSample) {
     gasPpm: round1(state.gasPpm),
     localAlarm: causes.length > 0,
     alarmCauses: causes,
-    buzzerMuted: state.buzzerMuted,
     network: 'online',
   }
 }
@@ -93,7 +91,6 @@ function getStatus(deviceId) {
     connectivity: 'online',
     alarmState: causes.length > 0 ? 'suspect' : 'normal',
     localAlarm: causes.length > 0,
-    buzzerMuted: state.buzzerMuted,
     lastSeenAt: nowIso(),
     offlineAfterSeconds: 15,
     thresholdVersion: {
@@ -132,7 +129,6 @@ function getHistory(deviceId, query = {}) {
       gasPpm: round1(gas),
       localAlarm: false,
       alarmCauses: [],
-      buzzerMuted: state.buzzerMuted,
     })
   }
   if (query.order === 'desc') {
@@ -230,15 +226,6 @@ function putThresholds(deviceId, data = {}) {
   }
 }
 
-function mute(deviceId, data = {}) {
-  state.buzzerMuted = !!data.muted
-  return {
-    requestId: 'mock-mute-' + Date.now(),
-    status: 'pending',
-    expiresAt: new Date(Date.now() + 30000).toISOString(),
-  }
-}
-
 /* ---------- 路由分发 ---------- */
 
 /**
@@ -260,7 +247,6 @@ async function handle(path, options = {}) {
   if (sub === 'alerts' && method === 'GET') return getAlerts(deviceId)
   if (sub === 'thresholds' && method === 'GET') return getThresholds(deviceId)
   if (sub === 'thresholds' && method === 'PUT') return putThresholds(deviceId, options.data)
-  if (sub === 'commands/mute' && method === 'POST') return mute(deviceId, options.data)
   throw new ApiError('not_implemented', 'Mock 未覆盖该路由: ' + method + ' ' + path, 501)
 }
 

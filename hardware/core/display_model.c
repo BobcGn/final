@@ -226,8 +226,7 @@ static void render_gas(const DisplayInput *input, DisplayFrame *frame)
     line_join(frame->lines[3], "Level: ", level);
 }
 
-/* Render the alarm page: cause letters, buzzer state, fault state and how the
- * alarm is being suppressed, if at all. */
+/* Render the alarm page: cause letters, buzzer state and fault state. */
 static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
 {
     char letters[8];
@@ -238,9 +237,7 @@ static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
     render_cause_letters(input->alarm_causes, letters);
     line_join(frame->lines[0], "Alarm: ", letters);
 
-    /* The buzzer line reports the actual output, not the mute request, because
-     * those differ exactly when the mute is suppressing an active alarm: that is
-     * the state an operator needs to notice on the panel. */
+    /* The buzzer line reports the actual output state. */
     line_set(frame->lines[1], TextSelect(input->buzzer_active, "Buzzer: ON", "Buzzer: off"));
 
     /* Derived from the cause bit rather than from a second flag, so the line
@@ -273,22 +270,12 @@ static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
     {
         line_set(frame->lines[3], "State: clear");
     }
-    else if (input->buzzer_muted)
-    {
-        /* The mute is reported next to the alarm, never instead of it. */
-        line_set(frame->lines[3], "State: MUTED");
-    }
     else
     {
         line_set(frame->lines[3], "State: ALARM");
     }
 }
 
-/* Render the network page: link state, SSID and the last server message.
- *
- * Preserving the downlink message keeps the behaviour the firmware had before
- * the carousel existed: the panel was the only place a server message could be
- * seen. */
 /* Build the receive-loss line: "RX DROP 3 TRUNC 1", abbreviated to fit the
  * sixteen-character panel. The counts are zero-padded so the line does not jump
  * as they grow, and the fields keep their columns from the right. */
@@ -325,6 +312,11 @@ static void render_receive_loss(char *line, uint32_t discarded, uint32_t truncat
     line_set(line, body);
 }
 
+/* Render the network page: link state, SSID and the last server message.
+ *
+ * Preserving the downlink message keeps the behaviour the firmware had before
+ * the carousel existed: the panel was the only place a server message could be
+ * seen. */
 static void render_network(const DisplayInput *input, DisplayFrame *frame)
 {
     const char *prefix = "Linking:";
@@ -421,7 +413,6 @@ void DisplayModelRender(DisplayPage page, const DisplayInput *input, DisplayFram
         empty.gas_adc_filtered = 0U;
         empty.alarm_causes = 0U;
         empty.dht_error = 0U;
-        empty.buzzer_muted = false;
         empty.buzzer_active = false;
         empty.gas_uncalibrated = true;
         empty.threshold_version = 0U;

@@ -21,7 +21,7 @@ function formatTime(iso) {
 }
 
 /**
- * 生成 UUID v4 字符串，作为控制类请求（静音/阈值下发）的 Idempotency-Key。
+ * 生成 UUID v4 字符串，作为控制类请求（阈值下发）的 Idempotency-Key。
  * 契约要求：相同用户、设备、路由和 key 的重复请求必须返回同一命令结果。
  */
 function genIdempotencyKey() {

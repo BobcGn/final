@@ -45,7 +45,6 @@ type deviceStatusResponse struct {
 	DeviceID            string              `json:"deviceId"`
 	Connectivity        domain.Connectivity `json:"connectivity"`
 	AlarmState          domain.AlertState   `json:"alarmState"`
-	BuzzerMuted         bool                `json:"buzzerMuted"`
 	LocalAlarm          bool                `json:"localAlarm"`
 	OfflineAfterSeconds int                 `json:"offlineAfterSeconds"`
 	LastSeenAt          *time.Time          `json:"lastSeenAt"`
@@ -73,7 +72,6 @@ type telemetryPoint struct {
 	GasCalibrated  bool                `json:"gasCalibrated"`
 	LocalAlarm     bool                `json:"localAlarm"`
 	AlarmCauses    []domain.AlarmCause `json:"alarmCauses"`
-	BuzzerMuted    bool                `json:"buzzerMuted"`
 	Network        domain.NetworkState `json:"network,omitempty"`
 	SensorFault    bool                `json:"sensorFault"`
 }
@@ -100,7 +98,6 @@ func newTelemetryPoint(sample domain.Telemetry) telemetryPoint {
 		GasCalibrated:  sample.GasCalibrated,
 		LocalAlarm:     sample.LocalAlarm,
 		AlarmCauses:    causes,
-		BuzzerMuted:    sample.BuzzerMuted,
 		Network:        sample.Network,
 		SensorFault:    sample.SensorFault,
 	}
@@ -210,11 +207,6 @@ type thresholdUpdateRequest struct {
 	TemperatureHighC *float64 `json:"temperatureHighC"`
 	HumidityHighRh   *float64 `json:"humidityHighRh"`
 	GasHighPpm       *float64 `json:"gasHighPpm"`
-}
-
-// muteCommandRequest is the body of POST /commands/mute.
-type muteCommandRequest struct {
-	Muted *bool `json:"muted"`
 }
 
 // commandAcceptedResponse is the 202 body of a control request.

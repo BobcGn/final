@@ -59,18 +59,6 @@
       <view class="kv"><text>声光提示</text><text>{{dashboard.buzzerText}}</text></view>
       <view class="kv"><text>更新时间</text><text>{{dashboard.updatedAt}}</text></view>
     </view>
-
-    <view class="section-head"><text class="section-title">远程控制</text><text class="section-tip">静音不影响检测与上报</text></view>
-    <view class="card">
-      <view class="control-title">蜂鸣器控制</view>
-      <view class="muted">{{dashboard.muteHint}}</view>
-      <!-- The tone comes from the shared command view, so a rejection, a timeout
-           and a device confirmation are visually distinct. -->
-      <view class="command-hint command-hint-{{commandTone}}" wx:if="{{commandHint}}">{{commandHint}}</view>
-      <button class="btn" disabled="{{muting}}" bindtap="onMute">
-        {{dashboard.buzzerMuted ? '恢复鸣叫' : '远程静音'}}
-      </button>
-    </view>
   </block>
 
   <!-- 趋势 -->

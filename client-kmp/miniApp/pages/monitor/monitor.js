@@ -53,7 +53,6 @@ Page({
     humidityHighRh: 80,
     gasHighPpm: 20,
     saving: false,
-    muting: false,
     commandHint: '',
     commandTone: 'warning',
   },
@@ -415,35 +414,6 @@ Page({
   async awaitCommandOutcome(requestId) {
     const settled = await runtime.awaitCommandOutcome(requestId)
     return settled ? JSON.parse(settled) : null
-  },
-
-  async onMute() {
-    if (this.data.muting || !this.data.dashboard) return
-    this.setData({ muting: true, commandHint: '' })
-    wx.showLoading({ title: '下发中', mask: true })
-    try {
-      const accepted = JSON.parse(await runtime.mute(!this.data.dashboard.buzzerMuted))
-      this.setData({ commandHint: accepted.stateText, commandTone: accepted.tone })
-      const outcome = await this.awaitCommandOutcome(accepted.requestId)
-      // The hint keeps the terminal tone, so a rejection or a timeout reads
-      // differently from a pending acknowledgement.
-      this.setData({
-        commandHint: outcome ? outcome.stateText : '等待设备确认',
-        commandTone: outcome ? outcome.tone : 'warning',
-      })
-      await this.loadDashboard(false)
-      wx.showToast({
-        title: outcome ? outcome.stateText : '等待设备确认',
-        // Only an explicit device `applied` acknowledgement is success.
-        // Pending, duplicate and failed outcomes must not get a green tick.
-        icon: outcome && outcome.confirmed ? 'success' : 'none',
-      })
-    } catch (e) {
-      wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
-    } finally {
-      wx.hideLoading()
-      this.setData({ muting: false })
-    }
   },
 
   onTemp(e) {

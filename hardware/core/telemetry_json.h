@@ -44,7 +44,6 @@ typedef struct
     bool local_alarm;
     /* Bitmask of EnvAlarmCause. */
     uint32_t alarm_causes;
-    bool buzzer_muted;
     bool network_online;
     uint32_t threshold_version;
     bool sensor_fault;

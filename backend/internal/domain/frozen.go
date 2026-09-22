@@ -43,7 +43,7 @@ func CommandStates() []CommandState {
 
 // CommandTypes returns every control command type.
 func CommandTypes() []CommandType {
-	return []CommandType{CommandSetMute, CommandSetThresholds}
+	return []CommandType{CommandSetThresholds}
 }
 
 // AckStatuses returns every device acknowledgement status.

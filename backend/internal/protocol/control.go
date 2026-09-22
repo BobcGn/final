@@ -14,11 +14,6 @@ var controlKeys = keySet(
 	"expiresAt", "type", "payload",
 )
 
-// mutePayload is the set_mute body.
-type mutePayload struct {
-	Muted *bool `json:"muted"`
-}
-
 // thresholdPayload is the set_thresholds body.
 type thresholdPayload struct {
 	ThresholdVersion *int     `json:"thresholdVersion"`
@@ -48,8 +43,6 @@ func EncodeControl(cmd domain.Command) ([]byte, error) {
 	}
 	var body any
 	switch cmd.Type {
-	case domain.CommandSetMute:
-		body = mutePayload{Muted: cmd.Payload.Muted}
 	case domain.CommandSetThresholds:
 		thresholds := cmd.Payload.Thresholds
 		body = thresholdPayload{
@@ -116,15 +109,6 @@ func DecodeControl(raw []byte, receivedAt time.Time) (domain.Command, error) {
 	}
 
 	switch cmd.Type {
-	case domain.CommandSetMute:
-		var body mutePayload
-		if _, err := decodeStrict(payload.Payload, keySet("muted"), &body); err != nil {
-			return domain.Command{}, err
-		}
-		if body.Muted == nil {
-			return domain.Command{}, newDecodeError(ReasonMissingField, "payload.muted", errMissing)
-		}
-		cmd.Payload.Muted = body.Muted
 	case domain.CommandSetThresholds:
 		var body thresholdPayload
 		if _, err := decodeStrict(payload.Payload, keySet("thresholdVersion", "temperatureHighC", "humidityHighRh", "gasHighPpm"), &body); err != nil {
@@ -142,6 +126,9 @@ func DecodeControl(raw []byte, receivedAt time.Time) (domain.Command, error) {
 		cmd.Payload.ThresholdVersion = body.ThresholdVersion
 		cmd.DesiredVersion = body.ThresholdVersion
 	default:
+		// set_mute was removed with the remote-mute capability. Any other type is
+		// likewise not a frozen control command; both are rejected as
+		// bad_request_type so the device can answer with the frozen error code.
 		return domain.Command{}, newDecodeError(ReasonBadRequestType, "type",
 			fmt.Errorf("type %q is not a frozen control command", payload.Type))
 	}

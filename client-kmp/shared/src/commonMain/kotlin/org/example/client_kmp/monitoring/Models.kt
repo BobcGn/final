@@ -37,7 +37,6 @@ data class DeviceStatus(
     val connectivity: Connectivity,
     val alarmState: AlertState,
     val lastSeenAt: String? = null,
-    val buzzerMuted: Boolean = false,
     val localAlarm: Boolean = false,
     val offlineAfterSeconds: Int? = null,
 )
@@ -66,7 +65,6 @@ data class TelemetryPoint(
     val gasPpm: Double? = null,
     val gasCalibrated: Boolean = false,
     val alarmCauses: List<String> = emptyList(),
-    val buzzerMuted: Boolean = false,
     val network: NetworkState = NetworkState.online,
     val sensorFault: Boolean = false,
     val bootId: String? = null,
@@ -178,9 +176,6 @@ data class CommandStatus(
     val confirmedVersion: Int? = null,
     val errorCode: String? = null,
 )
-
-@Serializable
-internal data class MuteCommand(val muted: Boolean)
 
 @Serializable
 internal data class ApiErrorEnvelope(val error: ApiErrorBody? = null)

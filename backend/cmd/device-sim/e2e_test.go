@@ -377,21 +377,21 @@ func TestControlCommandReachesTheDevice(t *testing.T) {
 		return getJSON(t, env.baseURL+"/api/v1/devices/MCU001/status", nil) == http.StatusOK
 	})
 
-	request, err := http.NewRequest(http.MethodPost, env.baseURL+"/api/v1/devices/MCU001/commands/mute",
-		strings.NewReader(`{"muted":true}`))
+	request, err := http.NewRequest(http.MethodPut, env.baseURL+"/api/v1/devices/MCU001/thresholds",
+		strings.NewReader(`{"temperatureHighC":35,"humidityHighRh":85,"gasHighPpm":120}`))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", "01E2EMUTE")
+	request.Header.Set("Idempotency-Key", "01E2ECONTROL")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		t.Fatalf("mute request: %v", err)
+		t.Fatalf("threshold request: %v", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("mute status = %d, want 202: %s", response.StatusCode, body)
+		t.Fatalf("threshold status = %d, want 202: %s", response.StatusCode, body)
 	}
 	var accepted struct {
 		RequestID string `json:"requestId"`
@@ -407,7 +407,9 @@ func TestControlCommandReachesTheDevice(t *testing.T) {
 	waitFor(t, "the device to receive the command", func() bool {
 		return len(simulator.ReceivedCommands()) > 0
 	})
-	waitFor(t, "the device to mute", simulator.Muted)
+	waitFor(t, "the device to adopt the version", func() bool {
+		return simulator.ThresholdVersion() == 2
+	})
 
 	// The device's acknowledgement must reach the backend and move the command
 	// out of pending.
@@ -429,9 +431,8 @@ func TestControlCommandReachesTheDevice(t *testing.T) {
 	if command.State != "applied" {
 		t.Fatalf("command state = %q, want applied", command.State)
 	}
-	// A mute does not concern thresholds, so it must not report a version.
-	if command.ConfirmedVersion != nil {
-		t.Fatalf("a mute command reported confirmed version %v", *command.ConfirmedVersion)
+	if command.ConfirmedVersion == nil || *command.ConfirmedVersion != 2 {
+		t.Fatalf("confirmed version = %v, want 2", command.ConfirmedVersion)
 	}
 }
 
@@ -521,8 +522,8 @@ func TestCommandIdempotencyOverTheAPI(t *testing.T) {
 	})
 
 	send := func() (int, string) {
-		request, err := http.NewRequest(http.MethodPost, env.baseURL+"/api/v1/devices/MCU001/commands/mute",
-			strings.NewReader(`{"muted":true}`))
+		request, err := http.NewRequest(http.MethodPut, env.baseURL+"/api/v1/devices/MCU001/thresholds",
+			strings.NewReader(`{"temperatureHighC":35,"humidityHighRh":85,"gasHighPpm":120}`))
 		if err != nil {
 			t.Fatalf("build request: %v", err)
 		}

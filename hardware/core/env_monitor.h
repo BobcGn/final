@@ -3,7 +3,7 @@
 
 /*
  * Pure local monitoring logic: gas filtering, threshold evaluation, rapid-rise
- * detection and the buzzer mute state.
+ * detection and the buzzer drive logic.
  *
  * This module is deliberately free of any STM32, GPIO or driver dependency so
  * that every decision it makes can be tested on a host. It receives numbers and
@@ -138,10 +138,10 @@ typedef struct
     uint32_t alarm_causes;
     /* True when any cause is set. */
     bool local_alarm;
-    /* True when the buzzer must sound: an alarm is active and not muted. */
+    /* True when the buzzer must sound: a gas alarm is active. */
     bool buzzer_on;
     /* True when a cause appeared that was not present in the previous
-     * evaluation, which is what clears a mute. */
+     * evaluation. */
     bool new_cause;
     uint16_t gas_adc_raw;
     uint16_t gas_adc_filtered;
@@ -169,15 +169,10 @@ typedef struct
 
     /* Causes from the previous evaluation, used to detect a new cause. */
     uint32_t previous_causes;
-    bool muted;
     uint32_t threshold_version;
 } EnvMonitor;
 
-/* Initialise the monitor with the compile-time default thresholds.
- *
- * `muted` starts false: a device that has just powered up must be able to
- * sound its buzzer, because silence after a reboot is indistinguishable from a
- * failed alarm. */
+/* Initialise the monitor with the compile-time default thresholds. */
 void EnvMonitorInit(EnvMonitor *monitor);
 
 /* Replace the thresholds. Values outside the accepted ranges are rejected as a
@@ -188,13 +183,6 @@ void EnvMonitorInit(EnvMonitor *monitor);
  * durably stored the same values before calling this, so that the reported
  * version never claims a configuration the device would lose on reset. */
 bool EnvMonitorSetThresholds(EnvMonitor *monitor, const EnvThresholds *thresholds, uint32_t version);
-
-/* Set the buzzer mute state. Muting never changes the alarm causes, the LED or
- * the reported state: it suppresses the buzzer only. */
-void EnvMonitorSetMuted(EnvMonitor *monitor, bool muted);
-
-/* Report the mute state. */
-bool EnvMonitorMuted(const EnvMonitor *monitor);
 
 /* Return the threshold version currently in force. */
 uint32_t EnvMonitorThresholdVersion(const EnvMonitor *monitor);
@@ -264,12 +252,12 @@ bool EnvAlarmHas(uint32_t causes, EnvAlarmCause cause);
  *      faults keep their LED, OLED and telemetry causes but stay silent, because
  *      the audible warning is reserved for the failure that needs someone in the
  *      room immediately.
- *   2. while such a cause is active and not muted, the buzzer sounds for
+ *   2. while such a cause is active, the buzzer sounds for
  *      GAS_BUZZER_ON_TICKS of every GAS_BUZZER_PERIOD_TICKS loop ticks. At the
  *      firmware's 100 ms tick that is 200 ms on and 800 ms off, which is
  *      unmistakable without being a continuous tone.
- *   3. a mute suppresses the output entirely, and `evaluation.buzzer_on` is what
- *      carries that, so a mute can never be bypassed by the cadence.
+ *   3. the buzzer is driven solely by the device's own gas-alarm logic. No
+ *      remote command can silence it.
  *
  * `tick` is the main-loop counter, which is why the cadence is expressed in
  * ticks: the loop's period is nominal and a millisecond timer would suggest a

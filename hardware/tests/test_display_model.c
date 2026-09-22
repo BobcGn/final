@@ -24,7 +24,6 @@ static DisplayInput quiet_input(void)
     input.gas_adc_filtered = 1328U;
     input.alarm_causes = 0U;
     input.dht_error = 0U;
-    input.buzzer_muted = false;
     input.buzzer_active = false;
     input.gas_uncalibrated = true;
     input.threshold_version = 1U;
@@ -235,7 +234,6 @@ static void test_alarm_page(void)
 
     TEST_CASE("an active alarm shows the buzzer as on");
     input.alarm_causes = DISPLAY_CAUSE_GAS_HIGH;
-    input.buzzer_muted = false;
     input.buzzer_active = true;
     DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
     CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: ON", 10) == 0);
@@ -249,19 +247,7 @@ static void test_alarm_page(void)
     CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: off", 11) == 0);
     CHECK_TRUE(strncmp(frame.lines[3], "State: ALARM", 12) == 0);
 
-    TEST_CASE("a muted alarm still reports the alarm, not silence");
-    /* This is the state an operator has to be able to notice: the alarm is
-     * active and the buzzer is suppressed. The page must say both, because a
-     * page that showed only "muted" would look like a clear room. */
-    input.alarm_causes = DISPLAY_CAUSE_GAS_HIGH;
-    input.buzzer_muted = true;
-    input.buzzer_active = false;
-    DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
-    CHECK_TRUE(strncmp(frame.lines[0], "Alarm: G", 8) == 0);
-    CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: off", 11) == 0);
-    CHECK_TRUE(strncmp(frame.lines[3], "State: MUTED", 12) == 0);
-
-    TEST_CASE("muting a clear device does not claim an alarm");
+    TEST_CASE("a clear device shows State: clear");
     input.alarm_causes = 0U;
     DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
     CHECK_TRUE(strncmp(frame.lines[3], "State: clear", 12) == 0);
@@ -389,12 +375,11 @@ static void test_cause_bits_agree_with_the_monitor(void)
 
         EnvMonitorInit(&monitor);
         EnvMonitorPushGas(&monitor, 3000U);
-    EnvMonitorSetGasEstimate(&monitor, 500U);
+        EnvMonitorSetGasEstimate(&monitor, 500U);
         EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, 1000U);
         evaluation = EnvMonitorEvaluate(&monitor, 1000U);
 
         input.alarm_causes = evaluation.alarm_causes;
-        input.buzzer_muted = EnvMonitorMuted(&monitor);
         input.buzzer_active = evaluation.buzzer_on;
         DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
         CHECK_TRUE(strncmp(frame.lines[0], "Alarm: G", 8) == 0);

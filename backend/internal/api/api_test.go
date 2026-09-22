@@ -196,7 +196,6 @@ func (e *env) seedTelemetry(t *testing.T, mutate func(map[string]any)) {
 		"gasCalibrated":    false,
 		"localAlarm":       true,
 		"alarmCauses":      []string{"gas_high"},
-		"buzzerMuted":      false,
 		"network":          "online",
 		"thresholdVersion": 1,
 		"sensorFault":      false,
@@ -254,7 +253,6 @@ func TestRoutesRequireABearerToken(t *testing.T) {
 		{http.MethodGet, "/api/v1/devices/MCU001/alerts"},
 		{http.MethodGet, "/api/v1/devices/MCU001/thresholds"},
 		{http.MethodPut, "/api/v1/devices/MCU001/thresholds"},
-		{http.MethodPost, "/api/v1/devices/MCU001/commands/mute"},
 		{http.MethodGet, "/api/v1/devices/MCU001/commands/01REQ"},
 		{http.MethodGet, "/ws/v1/devices/MCU001/telemetry"},
 	}
@@ -310,7 +308,6 @@ func TestDeviceStatusBeforeAndAfterTelemetry(t *testing.T) {
 		Connectivity        string `json:"connectivity"`
 		AlarmState          string `json:"alarmState"`
 		LocalAlarm          bool   `json:"localAlarm"`
-		BuzzerMuted         bool   `json:"buzzerMuted"`
 		OfflineAfterSeconds int    `json:"offlineAfterSeconds"`
 		LastSeenAt          string `json:"lastSeenAt"`
 		ThresholdVersion    struct {
@@ -654,16 +651,19 @@ func TestIdempotencyConflictIsA409(t *testing.T) {
 	}
 }
 
-// TestMuteRoute verifies the command acceptance and its documented meaning.
-func TestMuteRoute(t *testing.T) {
+// TestCommandStatusLifecycle verifies the command acceptance and its documented
+// meaning on the thresholds route, including that a missing command is a 404
+// with its own code distinct from a missing device.
+func TestCommandStatusLifecycle(t *testing.T) {
 	e := newEnv(t, nil)
 
 	var accepted struct {
 		RequestID string `json:"requestId"`
 		Status    string `json:"status"`
 	}
-	decode(t, e.do(t, http.MethodPost, "/api/v1/devices/MCU001/commands/mute",
-		`{"muted":true}`, map[string]string{"Idempotency-Key": "01MUTE"}), &accepted)
+	decode(t, e.do(t, http.MethodPut, "/api/v1/devices/MCU001/thresholds",
+		`{"temperatureHighC":36,"humidityHighRh":85,"gasHighPpm":120}`,
+		map[string]string{"Idempotency-Key": "01CMD"}), &accepted)
 
 	if accepted.RequestID == "" || accepted.Status != "pending" {
 		t.Fatalf("accepted = %+v", accepted)
@@ -681,7 +681,7 @@ func TestMuteRoute(t *testing.T) {
 	if status.State != "published" {
 		t.Fatalf("state = %q, want published", status.State)
 	}
-	if status.Type != "set_mute" {
+	if status.Type != "set_thresholds" {
 		t.Fatalf("type = %q", status.Type)
 	}
 
@@ -695,6 +695,14 @@ func TestMuteRoute(t *testing.T) {
 	if code := errorCode(t, missing); code != "command_not_found" {
 		t.Fatalf("code = %q, want command_not_found", code)
 	}
+
+	// The retired remote-mute route no longer exists and must answer 404.
+	retired := e.do(t, http.MethodPost, "/api/v1/devices/MCU001/commands/mute",
+		`{"muted":true}`, map[string]string{"Idempotency-Key": "01RETIRED"})
+	defer func() { _ = retired.Body.Close() }()
+	if retired.StatusCode != http.StatusNotFound {
+		t.Fatalf("the retired mute route returned %d, want 404", retired.StatusCode)
+	}
 }
 
 // TestBrokerFailureIsA503 verifies that a command the broker never took is
@@ -703,8 +711,9 @@ func TestBrokerFailureIsA503(t *testing.T) {
 	e := newEnv(t, nil)
 	e.publisher.fail(errors.New("broker down"))
 
-	response := e.do(t, http.MethodPost, "/api/v1/devices/MCU001/commands/mute",
-		`{"muted":true}`, map[string]string{"Idempotency-Key": "01MUTE"})
+	response := e.do(t, http.MethodPut, "/api/v1/devices/MCU001/thresholds",
+		`{"temperatureHighC":36,"humidityHighRh":85,"gasHighPpm":120}`,
+		map[string]string{"Idempotency-Key": "01CMD"})
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusServiceUnavailable {
@@ -1023,7 +1032,6 @@ func TestRouteTableMatchesTheContract(t *testing.T) {
 		"GET /api/v1/devices/{deviceId}/alerts":               true,
 		"GET /api/v1/devices/{deviceId}/thresholds":           true,
 		"PUT /api/v1/devices/{deviceId}/thresholds":           true,
-		"POST /api/v1/devices/{deviceId}/commands/mute":       true,
 		"GET /api/v1/devices/{deviceId}/commands/{requestId}": true,
 		"GET /ws/v1/devices/{deviceId}/telemetry":             true,
 	}

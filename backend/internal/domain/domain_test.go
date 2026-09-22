@@ -88,7 +88,6 @@ func validTelemetry() domain.Telemetry {
 		GasCalibrated:    false,
 		LocalAlarm:       false,
 		AlarmCauses:      []domain.AlarmCause{},
-		BuzzerMuted:      false,
 		Network:          domain.NetworkOnline,
 		ThresholdVersion: 3,
 		SensorFault:      false,
@@ -156,11 +155,6 @@ func TestTelemetryAcceptsConsistentAlarms(t *testing.T) {
 		"sensor fault with its cause": func(s *domain.Telemetry) {
 			s.SensorFault = true
 			s.AlarmCauses = []domain.AlarmCause{domain.AlarmSensorFault}
-		},
-		"muted buzzer keeps the alarm": func(s *domain.Telemetry) {
-			s.LocalAlarm = true
-			s.BuzzerMuted = true
-			s.AlarmCauses = []domain.AlarmCause{domain.AlarmGasHigh}
 		},
 		"null timestamp":    func(s *domain.Telemetry) { s.Timestamp = nil },
 		"null gas estimate": func(s *domain.Telemetry) { s.GasPpm = nil },

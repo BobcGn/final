@@ -122,9 +122,6 @@ object LabMonitorExports {
     suspend fun awaitCommandOutcome(requestId: String): String? =
         client.awaitCommandOutcome(requestId)?.let { client.encodeCommandStatus(it) }
 
-    /** Enqueues mute/unmute. The result is a backend acknowledgement, never a device confirmation. */
-    suspend fun mute(muted: Boolean): String = client.encodeCommandStatus(client.setMuted(muted))
-
     /** Validates and enqueues thresholds. Rejects before any network call when a value is out of range. */
     suspend fun updateThresholds(
         temperatureHighC: Double,

@@ -221,7 +221,6 @@ func (s *Service) HandleTelemetry(ctx context.Context, raw []byte) error {
 
 	state.LastBootID = sample.BootID
 	state.LastSequence = sample.Sequence
-	state.BuzzerMuted = sample.BuzzerMuted
 	state.LocalAlarm = sample.LocalAlarm
 	state.SensorFault = sample.SensorFault
 	state.GasCalibrated = sample.GasCalibrated

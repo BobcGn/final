@@ -190,9 +190,15 @@ func (s *Server) buildRouter() http.Handler {
 	register(http.MethodGet, "/api/v1/devices/{deviceId}/alerts", s.handleListAlerts, true)
 	register(http.MethodGet, "/api/v1/devices/{deviceId}/thresholds", s.handleGetThresholds, true)
 	register(http.MethodPut, "/api/v1/devices/{deviceId}/thresholds", s.handleUpdateThresholds, true)
-	register(http.MethodPost, "/api/v1/devices/{deviceId}/commands/mute", s.handleMute, true)
 	register(http.MethodGet, "/api/v1/devices/{deviceId}/commands/{requestId}", s.handleCommandStatus, true)
 	register(http.MethodGet, "/ws/v1/devices/{deviceId}/telemetry", s.handleWebSocket, true)
+
+	// The remote-mute route was deleted. Without this, POST to the historical
+	// URL falls through to GET /commands/{requestId} and ServeMux answers 405.
+	// Old clients must see a plain 404 that the route is gone. Registered
+	// outside register(): it is not part of the frozen route table and does
+	// not implement mute.
+	mux.HandleFunc("POST /api/v1/devices/{deviceId}/commands/mute", http.NotFound)
 
 	return mux
 }

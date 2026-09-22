@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -85,16 +87,15 @@ class MonitoringPresentationTest {
     }
 
     @Test
-    fun alarmAndMuteFallBackToDeviceStatusWhenTelemetryIsMissing() {
+    fun alarmFallsBackToDeviceStatusWhenTelemetryIsMissing() {
         val offlineAlarm = MonitoringPresentation.dashboard(
-            status(connectivity = Connectivity.offline, localAlarm = true, buzzerMuted = true),
+            status(connectivity = Connectivity.offline, localAlarm = true),
             null,
         )
 
         assertTrue(offlineAlarm.localAlarm)
         assertEquals("报警中", offlineAlarm.localAlarmText)
-        assertTrue(offlineAlarm.buzzerMuted)
-        assertEquals("已静音", offlineAlarm.buzzerText)
+        assertEquals("报警策略生效", offlineAlarm.buzzerText)
     }
 
     // --- dashboard: gas --------------------------------------------------------------------
@@ -152,15 +153,11 @@ class MonitoringPresentationTest {
     }
 
     @Test
-    fun buzzerWordingDistinguishesMutedAlarmingAndIdle() {
+    fun buzzerWordingDistinguishesAlarmingAndIdle() {
         assertEquals("待机", MonitoringPresentation.dashboard(status(), telemetry()).buzzerText)
         assertEquals(
             "报警策略生效",
             MonitoringPresentation.dashboard(status(), telemetry(localAlarm = true)).buzzerText,
-        )
-        assertEquals(
-            "已静音",
-            MonitoringPresentation.dashboard(status(localAlarm = true), telemetry(buzzerMuted = true)).buzzerText,
         )
     }
 
@@ -764,26 +761,17 @@ class MonitoringPresentationTest {
         assertEquals("下发后需设备确认，确认前仍按旧规则报警", view.saveHint)
     }
 
-    @Test
-    fun theDashboardCarriesTheBaselinesMutePromise() {
-        val view = MonitoringPresentation.dashboard(status(), telemetry())
-
-        assertEquals("静音不影响环境检测与告警上报", view.muteHint)
-    }
-
     private fun status(
         deviceId: String = "MCU001",
         connectivity: Connectivity = Connectivity.online,
         alarmState: AlertState = AlertState.normal,
         localAlarm: Boolean = false,
-        buzzerMuted: Boolean = false,
     ) = DeviceStatus(
         deviceId = deviceId,
         connectivity = connectivity,
         alarmState = alarmState,
         lastSeenAt = "2026-09-21T09:00:00Z",
         localAlarm = localAlarm,
-        buzzerMuted = buzzerMuted,
     )
 
     private fun telemetry(
@@ -791,13 +779,11 @@ class MonitoringPresentationTest {
         humidityRh: Double = 50.0,
         gasPpm: Double? = 100.0,
         localAlarm: Boolean = false,
-        buzzerMuted: Boolean = false,
     ) = point(
         temperatureC = temperatureC,
         humidityRh = humidityRh,
         gasPpm = gasPpm,
         localAlarm = localAlarm,
-        buzzerMuted = buzzerMuted,
     )
 
     private fun point(
@@ -807,7 +793,6 @@ class MonitoringPresentationTest {
         humidityRh: Double = 50.0,
         gasPpm: Double? = 100.0,
         localAlarm: Boolean = false,
-        buzzerMuted: Boolean = false,
         bootId: String? = null,
         sequence: Long? = null,
     ) = TelemetryPoint(
@@ -819,7 +804,6 @@ class MonitoringPresentationTest {
         gasAdcFiltered = 480,
         localAlarm = localAlarm,
         gasPpm = gasPpm,
-        buzzerMuted = buzzerMuted,
         bootId = bootId,
         sequence = sequence,
     )

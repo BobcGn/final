@@ -78,7 +78,6 @@ type Telemetry struct {
 	GasCalibrated    bool
 	LocalAlarm       bool
 	AlarmCauses      []AlarmCause
-	BuzzerMuted      bool
 	Network          NetworkState
 	ThresholdVersion int
 	SensorFault      bool

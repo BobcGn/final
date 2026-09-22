@@ -20,7 +20,6 @@ static TelemetryPayload sample_payload(void)
     payload.gas_calibrated = false;
     payload.local_alarm = false;
     payload.alarm_causes = 0U;
-    payload.buzzer_muted = false;
     payload.network_online = true;
     payload.threshold_version = 1U;
     payload.sensor_fault = false;
@@ -53,7 +52,6 @@ static void test_required_fields(void)
     CHECK_TRUE(test_json_has_number(buffer, "gasPpm", "25.0"));
     CHECK_TRUE(test_json_has_number(buffer, "gasCalibrated", "false"));
     CHECK_TRUE(test_json_has_number(buffer, "localAlarm", "false"));
-    CHECK_TRUE(test_json_has_number(buffer, "buzzerMuted", "false"));
     CHECK_TRUE(test_json_has_number(buffer, "thresholdVersion", "1"));
     CHECK_TRUE(test_json_has_number(buffer, "sensorFault", "false"));
 
@@ -126,16 +124,12 @@ static void test_state_flags(void)
     TelemetryPayload payload = sample_payload();
     uint32_t length;
 
-    TEST_CASE("a local alarm is reported alongside a muted buzzer");
-    /* The contract is explicit that a mute never clears the alarm, and the
-     * payload is where a client learns both facts at once. */
+    TEST_CASE("a local alarm is reported");
     payload.local_alarm = true;
-    payload.buzzer_muted = true;
     payload.alarm_causes = (uint32_t)ENV_ALARM_GAS_HIGH;
     length = TelemetryJsonEncode(&payload, buffer, sizeof(buffer));
     CHECK_TRUE(test_json_is_well_formed(buffer, length));
     CHECK_TRUE(test_json_has_number(buffer, "localAlarm", "true"));
-    CHECK_TRUE(test_json_has_number(buffer, "buzzerMuted", "true"));
     CHECK_TRUE(strstr(buffer, "\"alarmCauses\":[\"gas_high\"]") != NULL);
 
     TEST_CASE("a disconnected device reports reconnecting");

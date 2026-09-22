@@ -108,7 +108,6 @@ static void test_thresholds(void)
     CHECK_INT(ENV_DEFAULT_GAS_RISE_ADC, applied.gas_rise_adc);
     /* Version 1 means "the compile-time default", so a device never reports 0. */
     CHECK_INT(ENV_INITIAL_THRESHOLD_VERSION, EnvMonitorThresholdVersion(&monitor));
-    CHECK_FALSE(EnvMonitorMuted(&monitor));
 
     TEST_CASE("a valid update is applied and its version recorded");
     thresholds.temperature_high_c = 35U;
@@ -390,127 +389,6 @@ static void test_sensor_fault(void)
     CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_SENSOR_FAULT));
 }
 
-/* Exercise the mute rules, which are the ones most likely to hide an alarm. */
-static void test_mute_semantics(void)
-{
-    EnvMonitor monitor;
-    EnvEvaluation result;
-    uint32_t now_ms = 0U;
-
-    TEST_CASE("mute suppresses the buzzer but not the alarm");
-    EnvMonitorInit(&monitor);
-    EnvMonitorPushGas(&monitor, 3000U);
-    EnvMonitorSetGasEstimate(&monitor, 500U);
-    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
-    result = EnvMonitorEvaluate(&monitor, now_ms);
-    CHECK_TRUE(result.buzzer_on);
-
-    EnvMonitorSetMuted(&monitor, true);
-    result = EnvMonitorEvaluate(&monitor, now_ms);
-    CHECK_TRUE(EnvMonitorMuted(&monitor));
-    /* The alarm state, the LED and the reported causes are unaffected: a mute
-     * that cleared local_alarm would remove the operator's local indication. */
-    CHECK_TRUE(result.local_alarm);
-    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
-    CHECK_FALSE(result.buzzer_on);
-
-    TEST_CASE("the mute holds while the same cause continues");
-    result = EnvMonitorEvaluate(&monitor, now_ms + 1000U);
-    CHECK_FALSE(result.buzzer_on);
-    CHECK_FALSE(result.new_cause);
-
-    TEST_CASE("a newly appearing cause cancels the mute");
-    /* The gas alarm is still present and muted; a humidity alarm now appears as
-     * well. Silencing it would be the dangerous outcome, so the mute clears. */
-    EnvMonitorPushClimate(&monitor, 25U, 95U, 1U, now_ms + 2000U);
-    result = EnvMonitorEvaluate(&monitor, now_ms + 2000U);
-    CHECK_TRUE(result.new_cause);
-    CHECK_TRUE(result.buzzer_on);
-    CHECK_FALSE(EnvMonitorMuted(&monitor));
-
-    TEST_CASE("a fresh episode after the alarm cleared cancels the mute");
-    EnvMonitorInit(&monitor);
-    now_ms = 0U;
-    /* Alarm, then mute it. */
-    EnvMonitorPushGas(&monitor, 3000U);
-    EnvMonitorSetGasEstimate(&monitor, 500U);
-    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
-    result = EnvMonitorEvaluate(&monitor, now_ms);
-    CHECK_TRUE(result.buzzer_on);
-    EnvMonitorSetMuted(&monitor, true);
-
-    /* The room clears. */
-    EnvMonitorPushGas(&monitor, 1000U);
-    EnvMonitorSetGasEstimate(&monitor, 5U);
-    for (unsigned index = 0U; index < ENV_GAS_WINDOW_SIZE; index++)
-    {
-        EnvMonitorPushGas(&monitor, 1000U);
-    EnvMonitorSetGasEstimate(&monitor, 5U);
-    }
-    result = EnvMonitorEvaluate(&monitor, now_ms + 10000U);
-    CHECK_FALSE(result.local_alarm);
-
-    /* The same alarm returns later. The operator expects to hear it: a mute
-     * remembered from a previous episode would silently suppress this one. */
-    EnvMonitorPushGas(&monitor, 3000U);
-    EnvMonitorSetGasEstimate(&monitor, 500U);
-    for (unsigned index = 0U; index < ENV_GAS_WINDOW_SIZE; index++)
-    {
-        EnvMonitorPushGas(&monitor, 3000U);
-    EnvMonitorSetGasEstimate(&monitor, 500U);
-    }
-    result = EnvMonitorEvaluate(&monitor, now_ms + 20000U);
-    CHECK_TRUE(result.local_alarm);
-    CHECK_TRUE(result.buzzer_on);
-
-    TEST_CASE("unmuting explicitly restores the buzzer");
-    EnvMonitorSetMuted(&monitor, false);
-    result = EnvMonitorEvaluate(&monitor, now_ms + 21000U);
-    CHECK_TRUE(result.buzzer_on);
-
-    TEST_CASE("muting a quiet device has no effect on the reported state");
-    EnvMonitorInit(&monitor);
-    EnvMonitorSetMuted(&monitor, true);
-    EnvMonitorPushGas(&monitor, 1000U);
-    EnvMonitorSetGasEstimate(&monitor, 5U);
-    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, 1000U);
-    result = EnvMonitorEvaluate(&monitor, 1000U);
-    CHECK_FALSE(result.local_alarm);
-    CHECK_FALSE(result.buzzer_on);
-    CHECK_TRUE(EnvMonitorMuted(&monitor));
-
-    TEST_CASE("updating thresholds resets mute and clears previous causes so new alarm sounds");
-    {
-        EnvThresholds new_thresholds;
-        EnvMonitorInit(&monitor);
-        EnvMonitorPushGas(&monitor, 1000U);
-        EnvMonitorSetGasEstimate(&monitor, 100U);
-        EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, 1000U);
-        /* Alarm at 100 ppm when default is 20 ppm */
-        result = EnvMonitorEvaluate(&monitor, 1000U);
-        CHECK_TRUE(result.buzzer_on);
-        /* Mute the active alarm */
-        EnvMonitorSetMuted(&monitor, true);
-        result = EnvMonitorEvaluate(&monitor, 1100U);
-        CHECK_FALSE(result.buzzer_on);
-        CHECK_TRUE(EnvMonitorMuted(&monitor));
-
-        /* Now update thresholds: gas_high_ppm = 80 ppm.
-         * The new thresholds must reset mute and clear previous causes. */
-        EnvMonitorThresholds(&monitor, &new_thresholds);
-        new_thresholds.gas_high_ppm = 80U;
-        CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &new_thresholds, 2U));
-        CHECK_FALSE(EnvMonitorMuted(&monitor));
-
-        /* Next evaluation at 100 ppm must immediately alarm and sound buzzer */
-        result = EnvMonitorEvaluate(&monitor, 1200U);
-        CHECK_TRUE(result.local_alarm);
-        CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
-        CHECK_TRUE(result.buzzer_on);
-        CHECK_TRUE(result.new_cause);
-    }
-}
-
 /* Exercise the wrap-safe history scan. The millisecond counter wraps about
  * every 49.7 days, which is well inside the deployment window for a device that
  * is expected to run unattended. */
@@ -617,10 +495,11 @@ static void test_dynamic_threshold_buzzer(void)
     CHECK_FALSE(result.buzzer_on);
     CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0U));
 
-    TEST_CASE("THE BUG: a mute latched before a threshold update must not silence the new limit");
-    /* This is the reported failure: the operator mutes one episode, then sets a
-     * gas limit. When the reading meets the new limit the buzzer is still
-     * expected to sound. Before the fix the latched mute survived
+    TEST_CASE("after mute removal no mute branch can silence a threshold-lowered alarm");
+    /* This is the reported failure: the operator sets a gas limit while the
+     * reading is already above it. When the new limit lands the buzzer is
+     * expected to sound on the very next evaluation. Before the mute capability
+     * was deleted, a mute latched against a previous episode survived
      * EnvMonitorSetThresholds and kept evaluation.buzzer_on false forever. */
     EnvMonitorInit(&monitor);
     now_ms = 0U;
@@ -628,35 +507,25 @@ static void test_dynamic_threshold_buzzer(void)
     EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
     result = EnvMonitorEvaluate(&monitor, now_ms);
     CHECK_TRUE(result.buzzer_on);
-    EnvMonitorSetMuted(&monitor, true);
-    result = EnvMonitorEvaluate(&monitor, now_ms + 100U);
-    CHECK_FALSE(result.buzzer_on);
-    CHECK_TRUE(EnvMonitorMuted(&monitor));
 
     EnvMonitorThresholds(&monitor, &thresholds);
     thresholds.gas_high_ppm = 50U;
     CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
-    /* The update itself has to re-arm the buzzer: a residual mute would make
-     * every later assertion below fail even though the cause bits are right. */
-    CHECK_FALSE(EnvMonitorMuted(&monitor));
-    result = EnvMonitorEvaluate(&monitor, now_ms + 200U);
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&monitor));
+    result = EnvMonitorEvaluate(&monitor, now_ms + 100U);
     CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
-    CHECK_TRUE(result.new_cause);
     CHECK_TRUE(result.buzzer_on);
     CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
-    CHECK_FALSE(EnvMonitorMuted(&monitor));
 
-    TEST_CASE("a mute latched before the update cannot be re-armed by a later redelivery either");
+    TEST_CASE("a threshold update takes effect on the very next evaluation");
     /* Same defect through the command path's state: once the update has landed,
      * re-applying the same numbers (as a redelivery would after dedup) must not
-     * resurrect a mute the operator never re-issued. */
-    EnvMonitorSetMuted(&monitor, false);
-    result = EnvMonitorEvaluate(&monitor, now_ms + 300U);
+     * introduce a quiet period the operator never asked for. */
+    result = EnvMonitorEvaluate(&monitor, now_ms + 200U);
     CHECK_TRUE(result.buzzer_on);
     EnvMonitorThresholds(&monitor, &in_force);
     CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &in_force, 3U));
-    CHECK_FALSE(EnvMonitorMuted(&monitor));
-    result = EnvMonitorEvaluate(&monitor, now_ms + 400U);
+    result = EnvMonitorEvaluate(&monitor, now_ms + 300U);
     CHECK_TRUE(result.buzzer_on);
 
     TEST_CASE("rapid_gas_rise alone drives the intermittent buzzer");
@@ -831,7 +700,6 @@ void test_env_monitor_suite(void)
     test_absolute_alarms();
     test_rapid_rise();
     test_sensor_fault();
-    test_mute_semantics();
     test_history_timestamp_wrap();
     test_dynamic_threshold_buzzer();
     test_helpers();

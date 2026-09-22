@@ -1,13 +1,13 @@
 # 微信小程序界面 ↔ Backend API 对照表
 
 > 面向对象：Backend / 微信端开发者。用于核对「界面上的每个区块吃哪条接口、哪个字段」。
-> 事实源：[`api.md`](api.md)（v1.0.0，已冻结）、[`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)
+> 事实源：[`api.md`](api.md)、[`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)（v2.0.0）
 > 前端实现：`client-wx-native/`，数据统一经 `services/device.js`（REST 门面）与 `services/socket.js`（实时流）
 > 当前状态：Backend 全部路由已实现（2026-09-22，见 [`api.md`](api.md) §2）；前端 `config/env.js` 的 `useMock` 仍为 `true`，默认全部走本地 Mock（REST 与实时事件均由 Mock 提供），联调时改为 `false` 即切到真实接口。
 
 ---
 
-## 1. 总览：9 条路由 ↔ 前端方法 ↔ 使用页面
+## 1. 总览：8 条路由 ↔ 前端方法 ↔ 使用页面
 
 | # | 接口 | 前端方法 | 使用页面 | 后端现状 | 前端现状 |
 |---|---|---|---|---|---|
@@ -18,8 +18,7 @@
 | 5 | `GET /api/v1/devices/{id}/alerts` | `deviceService.getAlerts()` | 告警页 | Implemented | 已接入 |
 | 6 | `GET /api/v1/devices/{id}/thresholds` | `deviceService.getThresholds()` | 设置页 | Implemented | 已接入 |
 | 7 | `PUT /api/v1/devices/{id}/thresholds` | `deviceService.putThresholds()` | 设置页保存 | Implemented | 已接入 |
-| 8 | `POST /api/v1/devices/{id}/commands/mute` | `deviceService.muteBuzzer()` | 监控页远程静音 | Implemented | 已接入 |
-| 9 | `GET /ws/v1/devices/{id}/telemetry` | `socket.connect()` | 监控页 / 告警页 / 设置页 | Implemented | **已接入** |
+| 8 | `GET /ws/v1/devices/{id}/telemetry` | `socket.connect()` | 监控页 / 告警页 / 设置页 | Implemented | **已接入** |
 
 路径中的 `{id}` 必须匹配 `^[A-Za-z0-9_-]{1,32}$`（契约 §1.5），当前前端固定使用 `MCU001`。
 所有请求体/响应体字段名遵循 lower camel case，时间使用 UTC RFC 3339。
@@ -30,7 +29,7 @@
 
 数据入口：`pages/dashboard/dashboard.js`
 - 首次进入：`fetchInitial()` → 并发 **接口 2 + 接口 3**（REST 补数）
-- 之后：`subscribeStream()` → **接口 9** 增量驱动
+- 之后：`subscribeStream()` → **接口 8** 增量驱动
 - 断线重连：`socket` 回调 `onResync()` → 再次走 **接口 2 + 接口 3** 补数
 
 ### 2.1 页头
@@ -44,8 +43,8 @@
 | UI 元素 | 接口 | 字段 / 取值 | 代码位置 |
 |---|---|---|---|
 | 小标题「系统风险状态」 | 无 | 静态 | — |
-| 圆点颜色 + 大字（环境正常 / 疑似异常 / 火情预警 / 指标已恢复） | **接口 2**，或 **接口 9** `alert.state_changed` 后触发补数 | `alarmState`：`normal｜suspect｜fire_warning｜recovered`（首期无 `acknowledged`，见契约 FD-9；前端映射表中的「告警已确认」为遗留项，后端不会产生） | `ALARM_STATE` 映射表 → `applyStatus()` |
-| 右侧胶囊（在线 / 离线 / 未知） | **接口 2**，或 **接口 9** `device.status_changed` 后触发补数 | `connectivity`：`online｜offline｜unknown` | `CONNECTIVITY` 映射表 |
+| 圆点颜色 + 大字（环境正常 / 疑似异常 / 火情预警 / 指标已恢复） | **接口 2**，或 **接口 8** `alert.state_changed` 后触发补数 | `alarmState`：`normal｜suspect｜fire_warning｜recovered`（首期无 `acknowledged`，见契约 FD-9；前端映射表中的「告警已确认」为遗留项，后端不会产生） | `ALARM_STATE` 映射表 → `applyStatus()` |
+| 右侧胶囊（在线 / 离线 / 未知） | **接口 2**，或 **接口 8** `device.status_changed` 后触发补数 | `connectivity`：`online｜offline｜unknown` | `CONNECTIVITY` 映射表 |
 | 下方说明文字 | **接口 2** | 由 `alarmState` 派生的语义说明 | `ALARM_STATE[x].sub` |
 
 > ⚠️ 契约 §4 明确：`localAlarm`（设备本地判断）与 Backend 的 `alarmState`（复合预警）不是同一概念，界面分列显示，不可互相替代。
@@ -54,13 +53,13 @@
 
 | UI 元素 | 接口 | 字段 | 换算 |
 |---|---|---|---|
-| 温度数字 | **接口 3 / 接口 9** `telemetry.updated` | `temperatureC` | 保留 1 位小数 |
+| 温度数字 | **接口 3 / 接口 8** `telemetry.updated` | `temperatureC` | 保留 1 位小数 |
 | 湿度数字 | 同上 | `humidityRh` | 保留 1 位小数 |
 | 气体数字 | 同上 | `gasPpm`（**不是** `gasAdcRaw` / `gasAdcFiltered`） | 保留 1 位小数 |
 | 温度进度条宽度 | 同上 | `temperatureC` | 前端展示量程 0–40 °C |
 | 湿度进度条宽度 | 同上 | `humidityRh` | 前端展示量程 0–100 %RH |
 | 气体进度条宽度 | 同上 | `gasPpm` | 前端展示量程 0–100 ppm |
-| 区块右上角提示 | **接口 9** 连接状态（本地事件 `connection.changed`） | `open` → 「实时推送」；`reconnecting` → 「重连中，已切 REST 兜底」 | `describeStream()` |
+| 区块右上角提示 | **接口 8** 连接状态（本地事件 `connection.changed`） | `open` → 「实时推送」；`reconnecting` → 「重连中，已切 REST 兜底」 | `describeStream()` |
 
 > 💡 展示量程（40 °C / 100 ppm）与报警阈值（设置页的 `temperatureHighC` / `gasHighPpm`）是两回事，后续可把阈值画成量程条上的刻度线。
 
@@ -70,24 +69,15 @@
 |---|---|---|
 | 设备编号 | 页面常量 + **接口 2** `deviceId` | `MCU001` |
 | 在线胶囊 | **接口 2** | `connectivity` |
-| 本地报警（正常 / 报警中） | **接口 3 / 接口 9** | `localAlarm` |
-| 声光提示（鸣叫中 / 已静音） | **接口 3 / 接口 9** | `buzzerMuted` |
-| 更新时间 | **接口 3 / 接口 9** | `receivedAt`（`timestamp` 为 null 时兜底；实时事件用 `occurredAt`） |
+| 本地报警（正常 / 报警中） | **接口 3 / 接口 8** | `localAlarm` |
+| 更新时间 | **接口 3 / 接口 8** | `receivedAt`（`timestamp` 为 null 时兜底；实时事件用 `occurredAt`） |
 
-### 2.5 远程控制（蜂鸣器）
-
-| UI 元素 | 接口 | 说明 |
-|---|---|---|
-| 按钮文案 | **接口 3 / 接口 9** | `buzzerMuted` 取反 |
-| 点击下发 | **接口 8** `POST /commands/mute` | 请求体 `{ "muted": true/false }` + **`Idempotency-Key`（UUID v4，已实现）** |
-| 响应 | 接口 8 → `202 { requestId, status:"pending", expiresAt }` | 前端只提示「命令已下发」，**不再本地乐观改状态**；`buzzerMuted` 的真实变化由 `command.status_changed` 事件或补数驱动 |
-
-### 2.6 页面级行为
+### 2.5 页面级行为
 
 | 行为 | 实现 |
 |---|---|
 | 下拉刷新 | `onPullDownRefresh()` → 接口 2 + 接口 3 并发重拉 |
-| 进入页面 | 订阅接口 9，并触发一次 REST 补数 |
+| 进入页面 | 订阅接口 8，并触发一次 REST 补数 |
 | 离开页面 | `unsubscribeStream()` → 解绑事件并断开实时连接 |
 
 ### 2.7 契约已有、界面暂未使用的字段（可选增强）
@@ -97,8 +87,8 @@
 | `lastSeenAt` | 接口 2 | 展示「最后心跳时间」 |
 | `offlineAfterSeconds`（15s） | 接口 2 | 离线判定提示「超过 15 秒未收到上报」 |
 | `thresholdVersion.desired / confirmed` | 接口 2 | 监控页直接提示「阈值待设备确认」 |
-| `sequence` | 接口 3 / 接口 9 | 检测丢包（序号不连续） |
-| `alarmCauses[]`（`gas_high` 等） | 接口 3 / 接口 9 | 风险卡显示具体触发原因 |
+| `sequence` | 接口 3 / 接口 8 | 检测丢包（序号不连续） |
+| `alarmCauses[]`（`gas_high` 等） | 接口 3 / 接口 8 | 风险卡显示具体触发原因 |
 | `network` | 接口 3 | 设备侧网络状态，与 Backend `connectivity` 区分 |
 | `gasAdcRaw` / `gasAdcFiltered` | 接口 3 | 调试：对比滤波前后，验证 STM32 端滤波效果 |
 
@@ -126,7 +116,7 @@
 
 ## 4. 告警页（告警记录）逐块映射
 
-数据入口：`pages/alerts/alerts.js:fetch()` → **接口 5**；并订阅 **接口 9** 的 `alert.state_changed`（去抖 800ms 后自动刷新）
+数据入口：`pages/alerts/alerts.js:fetch()` → **接口 5**；并订阅 **接口 8** 的 `alert.state_changed`（去抖 800ms 后自动刷新）
 
 | UI 元素 | 接口 | 参数 / 字段 |
 |---|---|---|
@@ -146,7 +136,7 @@
 
 ## 5. 设置页（预警阈值）逐块映射
 
-数据入口：`pages/settings/settings.js:fetch()` → **接口 6**；并订阅 **接口 9** 的 `thresholds.confirmed` / `command.status_changed`
+数据入口：`pages/settings/settings.js:fetch()` → **接口 6**；并订阅 **接口 8** 的 `thresholds.confirmed` / `command.status_changed`
 
 | UI 元素 | 接口 | 字段 | 约束 |
 |---|---|---|---|
@@ -158,7 +148,7 @@
 | 规则同步状态 | **接口 6** | `confirmationState`：`confirmed｜pending｜rejected｜timed_out` | 文案见 `CONFIRM_TEXT` |
 | 期望版本 / 设备确认版本 | **接口 6** | `desiredVersion` / `confirmedVersion` | 两者不一致 = 命令在途/失败/设备离线 |
 | 更新时间 | **接口 6** | `updatedAt` | 展示为 `MM-DD HH:mm` |
-| 确认事件 | **接口 9** | `thresholds.confirmed`、`command.status_changed` | 事件到达即重新拉取接口 6；另保留 8 秒兜底重拉（仅 pending 时） |
+| 确认事件 | **接口 8** | `thresholds.confirmed`、`command.status_changed` | 事件到达即重新拉取接口 6；另保留 8 秒兜底重拉（仅 pending 时） |
 
 > 契约 §8：设备 ack `applied` 后才更新 `confirmedVersion`；超时**不回滚** `desiredVersion`，只标记 `timed_out` 供重试。
 
@@ -166,21 +156,7 @@
 
 ## 6. 控制类操作时序
 
-### 6.1 远程静音（接口 8）
-
-```text
-用户点「远程静音」
-  → 前端生成 Idempotency-Key（UUID v4）
-  → POST /api/v1/devices/MCU001/commands/mute   body: { muted: true }
-  → Backend 校验后发布 MQTT set_mute
-  ← 202 { requestId, status: "pending", expiresAt }
-  → 前端提示「静音命令已下发」（不改变本地 buzzerMuted）
-  → 设备执行并 ack → Backend 更新状态
-  → WebSocket command.status_changed → 前端补数 → 界面变为「已静音」
-```
-`set_mute` **只抑制蜂鸣器**：不清除 `localAlarm`、不关 LED/OLED、不停采样与上报（契约 §9）。
-
-### 6.2 阈值下发（接口 7）
+### 6.1 阈值下发（接口 7）
 
 ```text
 拖动滑块 → 点「保存并下发到设备」
@@ -194,7 +170,7 @@
 
 ---
 
-## 7. 实时层实现（接口 9）
+## 7. 实时层实现（接口 8）
 
 实现文件：`client-wx-native/services/socket.js`（页面用法：`socket.connect(deviceId, { onResync })` + `socket.on(type, handler)`）
 
@@ -213,7 +189,7 @@
 
 | 事件 `type` | 携带数据 | 消费页面 | 行为 |
 |---|---|---|---|
-| `telemetry.updated` | `sequence, temperatureC, humidityRh, gasAdcFiltered, gasPpm, localAlarm, buzzerMuted` | 监控页 | 直接刷新三卡与设备状态 |
+| `telemetry.updated` | `sequence, temperatureC, humidityRh, gasAdcFiltered, gasPpm, localAlarm` | 监控页 | 直接刷新三卡与设备状态 |
 | `device.status_changed` | online/offline/unknown | 监控页 | 重新拉取接口 2 |
 | `alert.state_changed` | 复合预警状态 | 监控页 / 告警页 | 监控页重拉状态；告警页去抖 800ms 后刷新列表 |
 | `command.status_changed` | 命令确认/拒绝/超时 | 监控页 / 设置页 | 重拉接口 2 + 接口 3（监控）/ 接口 6（设置） |
@@ -233,10 +209,10 @@
 | 404 | `device_not_found` | 「设备不存在或不可见」，监控页显示空态而非报错 | 2、3、6 |
 | 409 | `version_conflict` | 「版本冲突，请刷新后重试」（幂等键复用但内容不同） | 7 |
 | 422 | `invalid_threshold` | 用 `details.field` 定位到对应滑块下方红字提示 | 7 |
-| 503 | `rate_limited` | 「实时连接已满」（仅 WebSocket 满员时出现，见 api.md §1.6/§11） | 9 |
+| 503 | `rate_limited` | 「实时连接已满」（仅 WebSocket 满员时出现，见 api.md §1.6/§11） | 8 |
 | 500 | `internal_error` | 「服务异常，稍后重试」 | 全部 |
-| 503 | `broker_unavailable` | 「命令未能下发到设备，请稍后重试」 | 7、8 |
-| 504 | `device_ack_timeout` | 预留，当前不产生；设备确认超时以命令状态 `timed_out` 表达（见 api.md §1.6） | 7、8 |
+| 503 | `broker_unavailable` | 「命令未能下发到设备，请稍后重试」 | 7 |
+| 504 | `device_ack_timeout` | 预留，当前不产生；设备确认超时以命令状态 `timed_out` 表达（见 api.md §1.6） | 7 |
 
 ---
 
@@ -248,11 +224,10 @@
 | 在线状态 | `status.connectivity` | ✅ online / offline / unknown |
 | 温度 / 湿度 / 气体 | `telemetry.temperatureC / humidityRh / gasPpm` | ✅ |
 | 本地报警 | `telemetry.localAlarm` | ✅ |
-| 蜂鸣器 | `telemetry.buzzerMuted` | ✅ |
 | 更新时间 | `telemetry.receivedAt`（`timestamp` 兜底） | ✅ |
 | 告警状态与证据 | `alerts[].state`、`alerts[].evidence.*` | ✅ |
 | 阈值与版本 | `thresholds.temperatureHighC / humidityHighRh / gasHighPpm / desiredVersion / confirmedVersion / confirmationState` | ✅ |
-| 控制命令 | `commands/mute`、`PUT thresholds` + `Idempotency-Key` | ✅ |
+| 控制命令 | `PUT thresholds` + `Idempotency-Key` | ✅ |
 | 实时流 | `ws/v1/...` 五类事件 | ✅ 已接入 |
 | `X-Request-ID`（建议头） | 契约 §1.4 | ⚠️ 前端未携带 |
 | `Authorization`（生产必须） | 契约 §1.3 | ⚠️ 待鉴权方案确定后接入 |

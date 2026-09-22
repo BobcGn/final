@@ -4,8 +4,8 @@
  * Every branch here is one that decides whether a buzzer stays silent, so the
  * suite is written around the frozen contract rather than around the
  * implementation: the acknowledgement payloads are parsed as JSON, the subject
- * lines are compared against docs/device-protocol.md, and the monitor's mute
- * flag is asserted alongside the alarm causes so a mute that suppresses an
+ * lines are compared against docs/device-protocol.md, and the alarm causes are
+ * asserted alongside the threshold version so a command that silently drops an
  * alarm can never pass.
  */
 
@@ -215,18 +215,6 @@ static bool capture_visit(void *context, const MqttPacket *packet,
 /* Payload builders                                                    */
 /* ------------------------------------------------------------------ */
 
-static void build_mute_json(char *out, uint32_t capacity, const char *device_id,
-                            const char *request_id, const char *muted_literal,
-                            uint64_t issued_at, uint64_t expires_at)
-{
-    (void)snprintf(out, capacity,
-                   "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"%s\","
-                   "\"requestId\":\"%s\",\"issuedAt\":%llu,\"expiresAt\":%llu,"
-                   "\"type\":\"set_mute\",\"payload\":{\"muted\":%s}}",
-                   device_id, request_id, (unsigned long long)issued_at,
-                   (unsigned long long)expires_at, muted_literal);
-}
-
 static void build_thresholds_json(char *out, uint32_t capacity, const char *device_id,
                                   const char *request_id, uint32_t version, const char *temperature,
                                   const char *humidity, const char *gas)
@@ -240,11 +228,12 @@ static void build_thresholds_json(char *out, uint32_t capacity, const char *devi
                    (unsigned long long)COMMAND_EXPIRES_AT, version, temperature, humidity, gas);
 }
 
-/* Build the default mute payload with an ordinary identity. */
-static void build_default_mute(char *out, uint32_t capacity, const char *request_id, bool muted)
+/* A valid threshold command with an ordinary identity. Thresholds are the only
+ * command type left, so this is what "send a command" means in these tests. */
+static void build_default_command(char *out, uint32_t capacity, const char *request_id,
+                                  uint32_t version)
 {
-    build_mute_json(out, capacity, "MCU001", request_id, muted ? "true" : "false",
-                    COMMAND_ISSUED_AT, COMMAND_EXPIRES_AT);
+    build_thresholds_json(out, capacity, "MCU001", request_id, version, "30.0", "80.0", "80.0");
 }
 
 static void check_ack(const Capture *capture, const char *status, const char *error_code,
@@ -317,7 +306,7 @@ static void test_non_control_frames(void)
     CHECK_INT(0U, capture.ack_publishes);
 
     TEST_CASE("a PUBLISH on another topic is acknowledged but not executed");
-    build_default_mute(json, sizeof(json), "REQ-TOPIC", true);
+    build_default_command(json, sizeof(json), "REQ-TOPIC", 2U);
     length = MqttEncodePublish(frame, sizeof(frame), "device/telemetry", 9U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     CHECK_TRUE(length > 0U);
@@ -329,7 +318,7 @@ static void test_non_control_frames(void)
      * redelivery loop rather than change anything. */
     CHECK_INT(1U, capture.pubacks);
     CHECK_INT(0U, capture.ack_publishes);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(1U, fixture.link.counters.foreign_topic_frames);
 }
 
@@ -348,7 +337,7 @@ static void test_topic_matching(void)
     link_setup(&fixture);
     ControlLinkSetOnline(&fixture.link, true);
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-A", true);
+    build_default_command(json, sizeof(json), "REQ-A", 2U);
 
     TEST_CASE("a longer topic that starts with the control topic is refused");
     length = MqttEncodePublish(frame, sizeof(frame), "device/controlX", 1U, 1U,
@@ -356,7 +345,7 @@ static void test_topic_matching(void)
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
     CHECK_INT(0U, capture.ack_publishes);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(1U, fixture.link.counters.foreign_topic_frames);
 
     TEST_CASE("a shorter topic that prefixes the control topic is refused");
@@ -365,7 +354,7 @@ static void test_topic_matching(void)
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
     CHECK_INT(0U, capture.ack_publishes);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(2U, fixture.link.counters.foreign_topic_frames);
 
     TEST_CASE("a topic differing in its last byte is refused");
@@ -374,7 +363,7 @@ static void test_topic_matching(void)
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
     CHECK_INT(0U, capture.ack_publishes);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(3U, fixture.link.counters.foreign_topic_frames);
 
     TEST_CASE("the exact control topic is accepted without relying on a terminator");
@@ -388,7 +377,7 @@ static void test_topic_matching(void)
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
     CHECK_INT(1U, capture.ack_publishes);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "applied", NULL, "REQ-A");
     CHECK_INT(3U, fixture.link.counters.foreign_topic_frames);
 }
@@ -409,7 +398,7 @@ static void test_qos_and_puback(void)
     link_setup(&fixture);
     ControlLinkSetOnline(&fixture.link, true);
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-Q1", true);
+    build_default_command(json, sizeof(json), "REQ-Q1", 2U);
 
     TEST_CASE("a QoS 1 PUBLISH yields a PUBACK carrying its packet identifier");
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 0x1234U, 1U,
@@ -422,6 +411,7 @@ static void test_qos_and_puback(void)
      * business one. Collapsing them would either lose the command result or
      * tell the broker a command was understood when it was only received. */
     CHECK_INT(1U, capture.ack_publishes);
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fixture.monitor));
 
     TEST_CASE("the PUBACK frame is a well-formed MQTT PUBACK");
     CHECK_INT(4U, MqttEncodePuback(puback, sizeof(puback), (uint16_t)capture.last_puback_id));
@@ -435,8 +425,7 @@ static void test_qos_and_puback(void)
      * defensive branch rather than a supported mode: acknowledgements are the
      * recovery mechanism, which is exactly why a QoS 0 command gets none. */
     capture_reset(&capture);
-    EnvMonitorSetMuted(&fixture.monitor, false);
-    build_default_mute(json, sizeof(json), "REQ-Q0", false);
+    build_default_command(json, sizeof(json), "REQ-Q0", 3U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 4U, 0U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
@@ -444,88 +433,20 @@ static void test_qos_and_puback(void)
     CHECK_INT(0U, capture.pubacks);
     CHECK_INT(1U, capture.ack_publishes);
     CHECK_INT(1U, fixture.link.counters.non_qos1_frames);
+    CHECK_INT(3U, EnvMonitorThresholdVersion(&fixture.monitor));
 
     TEST_CASE("a PUBLISH with no established session is acknowledged but not acted on");
     ControlLinkSetOnline(&fixture.link, false);
     capture_reset(&capture);
-    EnvMonitorSetMuted(&fixture.monitor, false);
-    build_default_mute(json, sizeof(json), "REQ-OFFLINE", true);
+    build_default_command(json, sizeof(json), "REQ-OFFLINE", 4U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 5U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
     CHECK_INT(1U, capture.pubacks);
     CHECK_INT(0U, capture.ack_publishes);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(3U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(1U, fixture.link.counters.offline_frames);
-}
-
-/* ------------------------------------------------------------------ */
-/* Mute                                                                */
-/* ------------------------------------------------------------------ */
-
-static void test_mute_commands(void)
-{
-    Link fixture;
-    Capture capture;
-    uint8_t frame[FRAME_BUFFER_SIZE];
-    char json[CONTROL_JSON_MAX];
-    uint32_t length;
-
-    link_setup(&fixture);
-    ControlLinkSetOnline(&fixture.link, true);
-    capture_reset(&capture);
-
-    TEST_CASE("set_mute true mutes the buzzer and is acknowledged as applied");
-    build_default_mute(json, sizeof(json), "REQ-MUTE-ON", true);
-    length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 1U, 1U,
-                               (const uint8_t *)json, (uint32_t)strlen(json));
-    (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
-                                  sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
-    check_ack(&capture, "applied", NULL, "REQ-MUTE-ON");
-    CHECK_TRUE(test_json_has_number(capture.last_ack, "thresholdVersion", "null"));
-    CHECK_TRUE(test_json_has_number(capture.last_ack, "uptimeMs", "0"));
-    CHECK_TRUE(test_json_has_string(capture.last_ack, "bootId", "9f3ac21b"));
-
-    TEST_CASE("set_mute false unmutes and is acknowledged as applied");
-    capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-MUTE-OFF", false);
-    length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 2U, 1U,
-                               (const uint8_t *)json, (uint32_t)strlen(json));
-    (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
-                                  sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
-    check_ack(&capture, "applied", NULL, "REQ-MUTE-OFF");
-
-    TEST_CASE("muting never suppresses an alarm cause, only the buzzer");
-    /* Drive a gas alarm, then mute it. The cause mask and the local-alarm flag
-     * must survive: a mute that cleared them would silence the LED, the OLED and
-     * the telemetry as well, which is the failure mode this whole path exists to
-     * prevent. */
-    capture_reset(&capture);
-    EnvMonitorPushClimate(&fixture.monitor, 25U, 50U, 1U, 0U);
-    EnvMonitorPushGas(&fixture.monitor, 4000U);
-    EnvMonitorSetGasEstimate(&fixture.monitor, 900U);
-    {
-        EnvEvaluation evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
-        CHECK_TRUE(evaluation.local_alarm);
-        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
-    }
-
-    build_default_mute(json, sizeof(json), "REQ-MUTE-ALARM", true);
-    length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 3U, 1U,
-                               (const uint8_t *)json, (uint32_t)strlen(json));
-    (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
-                                  sizeof(fixture.ack), capture_visit, &capture);
-    {
-        EnvEvaluation evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
-        CHECK_TRUE(evaluation.local_alarm);
-        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
-        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_TEMPERATURE_HIGH) == false);
-        CHECK_FALSE(evaluation.buzzer_on);
-    }
-    check_ack(&capture, "applied", NULL, "REQ-MUTE-ALARM");
 }
 
 /* ------------------------------------------------------------------ */
@@ -544,25 +465,25 @@ static void test_duplicate_and_expiry(void)
     ControlLinkSetOnline(&fixture.link, true);
     capture_reset(&capture);
 
-    TEST_CASE("the first mute command is applied");
-    build_default_mute(json, sizeof(json), "REQ-DUP", true);
+    TEST_CASE("the first threshold command is applied");
+    build_default_command(json, sizeof(json), "REQ-DUP", 2U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 1U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "applied", NULL, "REQ-DUP");
 
     TEST_CASE("a redelivered requestId is reported duplicate and does not re-execute");
-    /* The redelivery carries the opposite intent. If the device executed it the
+    /* The redelivery carries a higher version. If the device executed it the
      * second time, a broker retry would undo the operator's own command. */
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-DUP", false);
+    build_default_command(json, sizeof(json), "REQ-DUP", 3U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 2U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "duplicate", NULL, "REQ-DUP");
     CHECK_INT(1U, fixture.link.counters.applied);
     CHECK_INT(1U, fixture.link.counters.duplicate);
@@ -590,26 +511,25 @@ static void test_duplicate_and_expiry(void)
 
     TEST_CASE("a command whose window has elapsed is rejected as expired");
     capture_reset(&capture);
-    EnvMonitorSetMuted(&fixture.monitor, false);
-    build_default_mute(json, sizeof(json), "REQ-EXPIRED", true);
+    build_default_command(json, sizeof(json), "REQ-EXPIRED", 5U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 5U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     /* The frame arrived at 1000 ms and is being executed 70 s later, which is
      * past the 60 s window the backend declared. */
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 1000U, 71000U, fixture.ack, sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(4U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "expired", NULL, "REQ-EXPIRED");
     CHECK_INT(1U, fixture.link.counters.expired);
 
     TEST_CASE("a command still inside its window is executed");
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-IN-WINDOW", true);
+    build_default_command(json, sizeof(json), "REQ-IN-WINDOW", 5U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 6U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     /* Exactly at the window boundary: the contract measures from receipt, so a
      * command arriving 60 s into a 60 s window is still inside it. */
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 1000U, 61000U, fixture.ack, sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(5U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "applied", NULL, "REQ-IN-WINDOW");
 
     TEST_CASE("an expired command is still remembered, so it cannot be replayed later");
@@ -618,12 +538,11 @@ static void test_duplicate_and_expiry(void)
      * duplicate the right answer is that the backend already holds the outcome
      * and a second, different-looking status would read as a new event. */
     capture_reset(&capture);
-    EnvMonitorSetMuted(&fixture.monitor, false);
-    build_default_mute(json, sizeof(json), "REQ-EXPIRED", true);
+    build_default_command(json, sizeof(json), "REQ-EXPIRED", 6U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 7U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 1000U, 200000U, fixture.ack, sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(5U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "duplicate", NULL, "REQ-EXPIRED");
 }
 
@@ -645,13 +564,12 @@ static void test_rejections(void)
 
     TEST_CASE("a command addressed to another device is rejected");
     capture_reset(&capture);
-    build_mute_json(json, sizeof(json), "MCU002", "REQ-DEV", "true", COMMAND_ISSUED_AT,
-                    COMMAND_EXPIRES_AT);
+    build_thresholds_json(json, sizeof(json), "MCU002", "REQ-DEV", 2U, "30.0", "80.0", "80.0");
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, packet_id++, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "rejected", "device_mismatch", "REQ-DEV");
 
     TEST_CASE("an unsupported schemaVersion is rejected before anything else");
@@ -659,14 +577,15 @@ static void test_rejections(void)
     (void)snprintf(json, sizeof(json),
                    "{\"schemaVersion\":2,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
                    "\"requestId\":\"REQ-SCHEMA\",\"issuedAt\":%llu,\"expiresAt\":%llu,"
-                   "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}",
+                   "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,"
+                   "\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}",
                    (unsigned long long)COMMAND_ISSUED_AT,
                    (unsigned long long)COMMAND_EXPIRES_AT);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, packet_id++, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "rejected", "schema_unsupported", "REQ-SCHEMA");
 
     TEST_CASE("an unknown command type is rejected");
@@ -674,14 +593,14 @@ static void test_rejections(void)
     (void)snprintf(json, sizeof(json),
                    "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
                    "\"requestId\":\"REQ-TYPE\",\"issuedAt\":%llu,\"expiresAt\":%llu,"
-                   "\"type\":\"reboot\",\"payload\":{\"muted\":true}}",
+                   "\"type\":\"reboot\",\"payload\":{\"thresholdVersion\":2}}",
                    (unsigned long long)COMMAND_ISSUED_AT,
                    (unsigned long long)COMMAND_EXPIRES_AT);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, packet_id++, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     check_ack(&capture, "rejected", "bad_request_type", "REQ-TYPE");
 
     TEST_CASE("a threshold outside its range is rejected and nothing is stored");
@@ -705,8 +624,9 @@ static void test_rejections(void)
     capture_reset(&capture);
     (void)snprintf(json, sizeof(json),
                    "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-                   "\"issuedAt\":%llu,\"expiresAt\":%llu,\"type\":\"set_mute\","
-                   "\"payload\":{\"muted\":true}}",
+                   "\"issuedAt\":%llu,\"expiresAt\":%llu,\"type\":\"set_thresholds\","
+                   "\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,"
+                   "\"humidityHighRh\":80,\"gasHighPpm\":80}}",
                    (unsigned long long)COMMAND_ISSUED_AT,
                    (unsigned long long)COMMAND_EXPIRES_AT);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, packet_id++, 1U,
@@ -716,7 +636,7 @@ static void test_rejections(void)
     CHECK_INT(0U, capture.ack_publishes);
     /* The transport acknowledgement is still owed: the frame was delivered. */
     CHECK_INT(1U, capture.pubacks);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(1U, fixture.link.counters.unaddressable_frames);
 
     TEST_CASE("a payload that is not JSON at all yields no acknowledgement");
@@ -739,20 +659,23 @@ static void test_rejections(void)
     CHECK_INT(1U, capture.pubacks);
     CHECK_INT(3U, fixture.link.counters.unaddressable_frames);
 
-    TEST_CASE("a quoted muted value is rejected rather than treated as true");
+    TEST_CASE("a retired set_mute command is rejected as an unknown type");
+    /* The remote-mute capability was deleted. An old client that still sends
+     * set_mute is told the type is not recognized rather than having its
+     * payload quietly reinterpreted as thresholds. */
     capture_reset(&capture);
     (void)snprintf(json, sizeof(json),
                    "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-                   "\"requestId\":\"REQ-QUOTED\",\"issuedAt\":%llu,\"expiresAt\":%llu,"
-                   "\"type\":\"set_mute\",\"payload\":{\"muted\":\"true\"}}",
+                   "\"requestId\":\"REQ-RETIRED\",\"issuedAt\":%llu,\"expiresAt\":%llu,"
+                   "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}",
                    (unsigned long long)COMMAND_ISSUED_AT,
                    (unsigned long long)COMMAND_EXPIRES_AT);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, packet_id++, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                   sizeof(fixture.ack), capture_visit, &capture);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
-    CHECK_INT(0U, capture.ack_publishes);
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fixture.monitor));
+    check_ack(&capture, "rejected", "bad_request_type", "REQ-RETIRED");
 }
 
 /* ------------------------------------------------------------------ */
@@ -879,11 +802,11 @@ static void test_buffer_handling(void)
     /* The driver hands up a whole TCP segment, and a segment can hold more than
      * one MQTT packet. Reading only the head would drop the command behind it
      * without leaving a trace. */
-    build_default_mute(json, sizeof(json), "REQ-MULTI-1", true);
+    build_default_command(json, sizeof(json), "REQ-MULTI-1", 2U);
     first = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 1U, 1U,
                               (const uint8_t *)json, (uint32_t)strlen(json));
     offset = first;
-    build_default_mute(json, sizeof(json), "REQ-MULTI-2", false);
+    build_default_command(json, sizeof(json), "REQ-MULTI-2", 3U);
     length = MqttEncodePublish(&frame[offset], (uint32_t)sizeof(frame) - offset,
                                CONTROL_TOPIC_COMMAND, 2U, 1U, (const uint8_t *)json,
                                (uint32_t)strlen(json));
@@ -896,12 +819,11 @@ static void test_buffer_handling(void)
      * last state is the one the second frame asked for. */
     CHECK_INT(2U, fixture.link.counters.applied);
     CHECK_INT(0U, fixture.link.counters.duplicate);
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(3U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(2U, fixture.link.counters.frames_decoded);
 
     TEST_CASE("a frame the codec refuses does not hide the command behind it");
     capture_reset(&capture);
-    EnvMonitorSetMuted(&fixture.monitor, false);
     /* A SUBSCRIBE is a packet the device should never receive from a broker, so
      * the codec refuses it. Its framing is intact, so the scan must continue. */
     frame[0] = (uint8_t)(MQTT_PACKET_SUBSCRIBE << 4);
@@ -912,7 +834,7 @@ static void test_buffer_handling(void)
     frame[5] = 0x00U;
     frame[6] = 0x00U;
     offset = 7U;
-    build_default_mute(json, sizeof(json), "REQ-AFTER-BAD", true);
+    build_default_command(json, sizeof(json), "REQ-AFTER-BAD", 4U);
     length = MqttEncodePublish(&frame[offset], (uint32_t)sizeof(frame) - offset,
                                CONTROL_TOPIC_COMMAND, 3U, 1U, (const uint8_t *)json,
                                (uint32_t)strlen(json));
@@ -920,7 +842,7 @@ static void test_buffer_handling(void)
     CHECK_INT(1U, ControlLinkHandleBuffer(&fixture.link, frame, offset + length, 0U, 0U, fixture.ack, sizeof(fixture.ack), capture_visit,
                                           &capture));
     CHECK_INT(1U, capture.ack_publishes);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(4U, EnvMonitorThresholdVersion(&fixture.monitor));
     CHECK_INT(1U, fixture.link.counters.frames_undecodable);
 
     TEST_CASE("a segment that ends inside a frame is counted as a partial frame");
@@ -928,7 +850,7 @@ static void test_buffer_handling(void)
      * across two segments cannot be reassembled. Counting it is what keeps the
      * loss visible instead of looking like a broker that sent nothing. */
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-PARTIAL", true);
+    build_default_command(json, sizeof(json), "REQ-PARTIAL", 5U);
     first = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 4U, 1U,
                               (const uint8_t *)json, (uint32_t)strlen(json));
     CHECK_TRUE(first > 8U);
@@ -973,7 +895,7 @@ static void test_buffer_handling(void)
             request_id[length] = 'R';
         }
         request_id[COMMAND_REQUEST_ID_MAX] = '\0';
-        build_default_mute(json, sizeof(json), request_id, true);
+        build_default_command(json, sizeof(json), request_id, 6U);
         CHECK_TRUE((uint32_t)strlen(json) < sizeof(json));
         first = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 5U, 1U,
                                   (const uint8_t *)json, (uint32_t)strlen(json));
@@ -987,10 +909,10 @@ static void test_buffer_handling(void)
 
     TEST_CASE("an acknowledgement that does not fit causes no publish");
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-SMALL", true);
+    build_default_command(json, sizeof(json), "REQ-SMALL", 7U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 6U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
-    /* The command still takes effect — the mute is applied before the payload is
+    /* The command still takes effect — it is applied before the payload is
      * rendered — so the failure is reported as a handler failure and left to the
      * backend's timeout rather than silently claiming success. */
     CHECK_INT(0U, ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack, 16U, capture_visit, &capture));
@@ -1039,7 +961,7 @@ static void test_single_packet_entry(void)
     capture_reset(&capture);
 
     TEST_CASE("the single-packet entry point reports the same acknowledgements");
-    build_default_mute(json, sizeof(json), "REQ-SINGLE", true);
+    build_default_command(json, sizeof(json), "REQ-SINGLE", 2U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 0x0102U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     CHECK_TRUE(MqttDecode(frame, length, &packet, &reason));
@@ -1050,7 +972,7 @@ static void test_single_packet_entry(void)
     CHECK_TRUE(outcome.publish_ack);
     CHECK_INT(0, strcmp(outcome.ack_topic, CONTROL_TOPIC_ACK));
     CHECK_INT(COMMAND_RESULT_APPLIED, outcome.result);
-    CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fixture.monitor));
 
     TEST_CASE("a packet that is not a PUBLISH reports nothing");
     frame[0] = (uint8_t)(MQTT_PACKET_PINGRESP << 4);
@@ -1079,7 +1001,7 @@ static void test_shared_sequence(void)
     TEST_CASE("the counter the caller seeds is the one the acknowledgement reports");
     capture_reset(&capture);
     ControlLinkSetSequence(&fixture.link, 500U);
-    build_default_mute(json, sizeof(json), "REQ-SEQ-1", true);
+    build_default_command(json, sizeof(json), "REQ-SEQ-1", 2U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 1U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
@@ -1090,7 +1012,7 @@ static void test_shared_sequence(void)
     TEST_CASE("the counter advances so the next message cannot reuse it");
     CHECK_INT(501U, ControlLinkSequence(&fixture.link));
     capture_reset(&capture);
-    build_default_mute(json, sizeof(json), "REQ-SEQ-2", false);
+    build_default_command(json, sizeof(json), "REQ-SEQ-2", 3U);
     length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 2U, 1U,
                                (const uint8_t *)json, (uint32_t)strlen(json));
     (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
@@ -1172,59 +1094,63 @@ static void test_buzzer_policy(void)
         CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 10U));
     }
 
-    TEST_CASE("a muted gas alarm is silent at every point in the cadence");
-    EnvMonitorSetMuted(&fixture.monitor, true);
-    evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
+    TEST_CASE("a gas alarm stays audible across every evaluation while the gas is unsafe");
+    evaluation = EnvMonitorEvaluate(&fixture.monitor, 100U);
     CHECK_TRUE(evaluation.local_alarm);
     CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
-    CHECK_FALSE(evaluation.buzzer_on);
+    CHECK_TRUE(evaluation.buzzer_on);
     {
         uint32_t tick;
+        uint32_t on_ticks = 0U;
 
         for (tick = 0U; tick < 30U; tick++)
         {
-            CHECK_FALSE(EnvMonitorBuzzerDrive(&evaluation, tick));
+            if (EnvMonitorBuzzerDrive(&evaluation, tick))
+            {
+                on_ticks++;
+            }
         }
+        /* The gas is still above the limit on this evaluation, so the buzzer
+         * keeps the 2-in-10 cadence across three full periods. */
+        CHECK_INT(6U, on_ticks);
     }
 
-    TEST_CASE("a newly appearing cause cancels the mute and sounds again");
-    /* The gas alarm was muted, then a humidity alarm appears as well. Keeping the
-     * mute would silence the new cause on the strength of an instruction the
-     * operator gave about a different one. */
+    TEST_CASE("a new cause does not silence a gas alarm already sounding");
+    /* The gas alarm is still active, then a humidity alarm appears as well.
+     * After mute removal nothing can silence a gas alarm that is already
+     * sounding, so the buzzer keeps going on the strength of the gas cause. */
     EnvMonitorPushClimate(&fixture.monitor, 60U, 95U, 1U, 1000U);
     evaluation = EnvMonitorEvaluate(&fixture.monitor, 1000U);
     CHECK_TRUE(evaluation.new_cause);
     CHECK_TRUE(evaluation.buzzer_on);
     CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 0U));
-    CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
 
-    TEST_CASE("applying a threshold command clears mute so a continuing gas alarm sounds buzzer");
+    TEST_CASE("a threshold update takes effect on the very next evaluation");
     {
         uint8_t frame[FRAME_BUFFER_SIZE];
         char json[CONTROL_JSON_MAX];
         Capture capture;
         uint32_t length;
 
-        /* Gas alarm is active at 100 ppm, then muted by operator. */
+        /* Gas reading is 100 ppm against a 20 ppm limit: the alarm is on. */
         EnvMonitorPushGas(&fixture.monitor, 1000U);
         EnvMonitorSetGasEstimate(&fixture.monitor, 100U);
         evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
         CHECK_TRUE(evaluation.buzzer_on);
-        EnvMonitorSetMuted(&fixture.monitor, true);
-        evaluation = EnvMonitorEvaluate(&fixture.monitor, 100U);
-        CHECK_FALSE(evaluation.buzzer_on);
-        CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
 
-        /* Now backend pushes new thresholds (e.g. gasHighPpm: 50, version 10). */
+        /* Backend pushes new thresholds (gasHighPpm: 50, version 10). The new
+         * limit is still below the 100 ppm reading, so the gas alarm has to
+         * stay on — and after mute removal nothing can keep the buzzer quiet
+         * across the update. */
         ControlLinkSetOnline(&fixture.link, true);
         capture_reset(&capture);
-        build_thresholds_json(json, sizeof(json), "MCU001", "REQ-GAS-UNMUTE", 10U, "30.0", "80.0", "50.0");
+        build_thresholds_json(json, sizeof(json), "MCU001", "REQ-GAS-UPDATE", 10U, "30.0", "80.0", "50.0");
         length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 20U, 1U,
                                    (const uint8_t *)json, (uint32_t)strlen(json));
         (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
                                       sizeof(fixture.ack), capture_visit, &capture);
-        check_ack(&capture, "applied", NULL, "REQ-GAS-UNMUTE");
-        CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+        check_ack(&capture, "applied", NULL, "REQ-GAS-UPDATE");
+        CHECK_INT(10U, EnvMonitorThresholdVersion(&fixture.monitor));
 
         /* Immediately evaluate at 100 ppm: buzzer_on and BuzzerDrive must be active */
         evaluation = EnvMonitorEvaluate(&fixture.monitor, 200U);
@@ -1306,7 +1232,6 @@ void test_control_link_suite(void)
     test_non_control_frames();
     test_topic_matching();
     test_qos_and_puback();
-    test_mute_commands();
     test_duplicate_and_expiry();
     test_rejections();
     test_threshold_commands();
