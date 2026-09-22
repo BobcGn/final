@@ -545,6 +545,256 @@ static void test_history_timestamp_wrap(void)
     CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_RAPID_TEMPERATURE_RISE));
 }
 
+/* Regression matrix for the "set a gas limit and the buzzer still stays quiet"
+ * defect. The root cause is that EnvMonitorSetThresholds installed the new
+ * numbers without re-arming the alarm decision: a mute latched against the
+ * previous episode stayed latched, and a cause that merely continued across the
+ * update never counted as a new event. Every case below is stated as the
+ * operator experiences it — configure a limit, watch the reading, expect sound. */
+static void test_dynamic_threshold_buzzer(void)
+{
+    EnvMonitor monitor;
+    EnvEvaluation result;
+    EnvThresholds thresholds;
+    EnvThresholds in_force;
+    uint32_t now_ms;
+
+    TEST_CASE("a dynamic limit equal to the reading is a trigger, exactly like the default one");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 30U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 30U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.local_alarm);
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+
+    TEST_CASE("a dynamic limit above the reading stays quiet");
+    EnvMonitorInit(&monitor);
+    push_gas(&monitor, 1000U, 30U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 31U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_FALSE(result.buzzer_on);
+
+    TEST_CASE("lowering the limit below the current reading alarms on the very next evaluation");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 15U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_FALSE(result.local_alarm);
+    CHECK_FALSE(result.buzzer_on);
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 10U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.new_cause);
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 1U));
+
+    TEST_CASE("raising the limit above the current reading clears the alarm on the next evaluation");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 50U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(result.buzzer_on);
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 80U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_FALSE(result.local_alarm);
+    CHECK_FALSE(result.buzzer_on);
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0U));
+
+    TEST_CASE("THE BUG: a mute latched before a threshold update must not silence the new limit");
+    /* This is the reported failure: the operator mutes one episode, then sets a
+     * gas limit. When the reading meets the new limit the buzzer is still
+     * expected to sound. Before the fix the latched mute survived
+     * EnvMonitorSetThresholds and kept evaluation.buzzer_on false forever. */
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 100U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(result.buzzer_on);
+    EnvMonitorSetMuted(&monitor, true);
+    result = EnvMonitorEvaluate(&monitor, now_ms + 100U);
+    CHECK_FALSE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorMuted(&monitor));
+
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 50U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    /* The update itself has to re-arm the buzzer: a residual mute would make
+     * every later assertion below fail even though the cause bits are right. */
+    CHECK_FALSE(EnvMonitorMuted(&monitor));
+    result = EnvMonitorEvaluate(&monitor, now_ms + 200U);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.new_cause);
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+    CHECK_FALSE(EnvMonitorMuted(&monitor));
+
+    TEST_CASE("a mute latched before the update cannot be re-armed by a later redelivery either");
+    /* Same defect through the command path's state: once the update has landed,
+     * re-applying the same numbers (as a redelivery would after dedup) must not
+     * resurrect a mute the operator never re-issued. */
+    EnvMonitorSetMuted(&monitor, false);
+    result = EnvMonitorEvaluate(&monitor, now_ms + 300U);
+    CHECK_TRUE(result.buzzer_on);
+    EnvMonitorThresholds(&monitor, &in_force);
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &in_force, 3U));
+    CHECK_FALSE(EnvMonitorMuted(&monitor));
+    result = EnvMonitorEvaluate(&monitor, now_ms + 400U);
+    CHECK_TRUE(result.buzzer_on);
+
+    TEST_CASE("rapid_gas_rise alone drives the intermittent buzzer");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 5U, ENV_GAS_WINDOW_SIZE);
+    settle_climate(&monitor, 25U, 50U, &now_ms);
+    /* Stay under the absolute ppm limit so only the rise cause is present. */
+    EnvMonitorSetGasEstimate(&monitor, 5U);
+    push_gas(&monitor, (uint16_t)(1000U + ENV_DEFAULT_GAS_RISE_ADC), 5U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms += 1000U);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_RAPID_GAS_RISE));
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 1U));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 2U));
+
+    TEST_CASE("temperature, humidity and sensor fault alone never sound the buzzer");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 1U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 40U, 95U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(result.local_alarm);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_TEMPERATURE_HIGH));
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_HUMIDITY_HIGH));
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_RAPID_GAS_RISE));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0U));
+    EnvMonitorPushClimate(&monitor, 0U, 0U, 0U, now_ms + 1000U);
+    result = EnvMonitorEvaluate(&monitor, now_ms + 1000U);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_SENSOR_FAULT));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0U));
+
+    TEST_CASE("any gas cause alongside non-gas causes still sounds");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 3000U, 400U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 40U, 95U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_TEMPERATURE_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+
+    TEST_CASE("a previously applied dynamic limit keeps driving the buzzer with no network in sight");
+    /* The monitor holds no transport state at all: once the numbers are in
+     * force, a device that can no longer reach the broker alarms exactly the
+     * same way. This is the offline-autonomy half of the defect report. */
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 40U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 5U));
+    push_gas(&monitor, 1000U, 45U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 1U));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 3U));
+
+    TEST_CASE("a limit loaded from storage drives the buzzer on the first evaluation");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    /* Stand in for ThresholdStoreLoad: the numbers that come back from Flash are
+     * installed before the first sample, which is what main.c does on boot. */
+    thresholds.temperature_high_c = ENV_DEFAULT_TEMPERATURE_HIGH_C;
+    thresholds.humidity_high_rh = ENV_DEFAULT_HUMIDITY_HIGH_RH;
+    thresholds.gas_high_ppm = 25U;
+    thresholds.temperature_rise_c = ENV_DEFAULT_TEMPERATURE_RISE_C;
+    thresholds.gas_rise_adc = ENV_DEFAULT_GAS_RISE_ADC;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 4U));
+    CHECK_INT(4U, EnvMonitorThresholdVersion(&monitor));
+    push_gas(&monitor, 1000U, 30U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(result.new_cause);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+
+    TEST_CASE("a failed threshold update leaves the previous limit and its buzzer behaviour intact");
+    EnvMonitorInit(&monitor);
+    now_ms = 0U;
+    push_gas(&monitor, 1000U, 15U, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, now_ms);
+    EnvMonitorThresholds(&monitor, &thresholds);
+    thresholds.gas_high_ppm = 10U;
+    CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &thresholds, 2U));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(result.buzzer_on);
+    /* A refused update must not move the version or the numbers. */
+    thresholds.gas_high_ppm = 0U;
+    CHECK_FALSE(EnvMonitorSetThresholds(&monitor, &thresholds, 3U));
+    EnvMonitorThresholds(&monitor, &in_force);
+    CHECK_INT(10U, in_force.gas_high_ppm);
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&monitor));
+    result = EnvMonitorEvaluate(&monitor, now_ms);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+
+    TEST_CASE("boundary values and the wrap of the rise window do not drop a gas alarm");
+    EnvMonitorInit(&monitor);
+    push_gas(&monitor, 1000U, ENV_DEFAULT_GAS_HIGH_PPM, ENV_GAS_WINDOW_SIZE);
+    EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, 0xFFFFF000U);
+    result = EnvMonitorEvaluate(&monitor, 0xFFFFF100U);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    result = EnvMonitorEvaluate(&monitor, 0x00000100U);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    /* Exactly at the limit is still a trigger after the counter has wrapped. */
+    EnvMonitorSetGasEstimate(&monitor, ENV_DEFAULT_GAS_HIGH_PPM);
+    result = EnvMonitorEvaluate(&monitor, 0x00000200U);
+    CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_TRUE(result.buzzer_on);
+    EnvMonitorSetGasEstimate(&monitor, (uint16_t)(ENV_DEFAULT_GAS_HIGH_PPM - 1U));
+    result = EnvMonitorEvaluate(&monitor, 0x00000300U);
+    CHECK_FALSE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+    CHECK_FALSE(result.buzzer_on);
+
+    TEST_CASE("the intermittent cadence stays 2-on / 8-off across the tick wrap");
+    EnvMonitorSetGasEstimate(&monitor, 500U);
+    result = EnvMonitorEvaluate(&monitor, 0x00000400U);
+    CHECK_TRUE(result.buzzer_on);
+    /* The two on-ticks just before the wrap, then the two just after it. */
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0xFFFFFFFAU));
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0xFFFFFFFBU));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0xFFFFFFFCU));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 0xFFFFFFFFU));
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 0U));
+    CHECK_TRUE(EnvMonitorBuzzerDrive(&result, 1U));
+    CHECK_FALSE(EnvMonitorBuzzerDrive(&result, 2U));
+}
+
 /* Exercise the caller-visible helpers. */
 static void test_helpers(void)
 {
@@ -583,5 +833,6 @@ void test_env_monitor_suite(void)
     test_sensor_fault();
     test_mute_semantics();
     test_history_timestamp_wrap();
+    test_dynamic_threshold_buzzer();
     test_helpers();
 }

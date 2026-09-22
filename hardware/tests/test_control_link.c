@@ -1233,6 +1233,69 @@ static void test_buzzer_policy(void)
         CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 0U));
     }
 
+    TEST_CASE("a threshold command that lowers the gas limit alarms on the next evaluation");
+    {
+        uint8_t frame[FRAME_BUFFER_SIZE];
+        char json[CONTROL_JSON_MAX];
+        Capture capture;
+        uint32_t length;
+        EnvThresholds in_force;
+
+        link_setup(&fixture);
+        EnvMonitorPushGas(&fixture.monitor, 1000U);
+        EnvMonitorSetGasEstimate(&fixture.monitor, 15U);
+        EnvMonitorPushClimate(&fixture.monitor, 25U, 50U, 1U, 0U);
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
+        CHECK_FALSE(evaluation.local_alarm);
+        CHECK_FALSE(evaluation.buzzer_on);
+
+        ControlLinkSetOnline(&fixture.link, true);
+        capture_reset(&capture);
+        build_thresholds_json(json, sizeof(json), "MCU001", "REQ-GAS-LOWER", 2U, "30.0", "80.0", "10.0");
+        length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 20U, 1U,
+                                   (const uint8_t *)json, (uint32_t)strlen(json));
+        (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
+                                      sizeof(fixture.ack), capture_visit, &capture);
+        check_ack(&capture, "applied", NULL, "REQ-GAS-LOWER");
+        EnvMonitorThresholds(&fixture.monitor, &in_force);
+        CHECK_INT(10U, in_force.gas_high_ppm);
+
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 100U);
+        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
+        CHECK_TRUE(evaluation.new_cause);
+        CHECK_TRUE(evaluation.buzzer_on);
+        CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 1U));
+    }
+
+    TEST_CASE("an applied dynamic limit still sounds after the link goes offline");
+    {
+        uint8_t frame[FRAME_BUFFER_SIZE];
+        char json[CONTROL_JSON_MAX];
+        Capture capture;
+        uint32_t length;
+
+        link_setup(&fixture);
+        EnvMonitorPushGas(&fixture.monitor, 1000U);
+        EnvMonitorSetGasEstimate(&fixture.monitor, 45U);
+        EnvMonitorPushClimate(&fixture.monitor, 25U, 50U, 1U, 0U);
+
+        ControlLinkSetOnline(&fixture.link, true);
+        capture_reset(&capture);
+        build_thresholds_json(json, sizeof(json), "MCU001", "REQ-GAS-OFFLINE", 3U, "30.0", "80.0", "40.0");
+        length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 20U, 1U,
+                                   (const uint8_t *)json, (uint32_t)strlen(json));
+        (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
+                                      sizeof(fixture.ack), capture_visit, &capture);
+        check_ack(&capture, "applied", NULL, "REQ-GAS-OFFLINE");
+
+        ControlLinkSetOnline(&fixture.link, false);
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 100U);
+        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
+        CHECK_TRUE(evaluation.buzzer_on);
+        CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 0U));
+        CHECK_FALSE(EnvMonitorBuzzerDrive(&evaluation, 3U));
+    }
+
     TEST_CASE("a null evaluation is refused rather than dereferenced");
     CHECK_FALSE(EnvMonitorBuzzerDrive(NULL, 0U));
 }
