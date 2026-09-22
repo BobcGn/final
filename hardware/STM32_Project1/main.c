@@ -253,7 +253,11 @@ int main(void)
              * can say which failure it is instead of only that one happened. */
             display.dht_error = dhtError;
             display.buzzer_muted = EnvMonitorMuted(&monitor);
-            display.buzzer_active = (buzzerActive != 0U);
+            /* Reflect audible alarm status on the display rather than the 200 ms
+             * instantaneous cadence pulse, so the OLED does not flash "off" for
+             * 800 ms of each second during an active gas alarm. */
+            display.buzzer_active = evaluation.buzzer_on &&
+                ((evaluation.alarm_causes & ((uint32_t)ENV_ALARM_GAS_HIGH | (uint32_t)ENV_ALARM_RAPID_GAS_RISE)) != 0U);
             display.threshold_version = EnvMonitorThresholdVersion(&monitor);
             /* The panel shows the fault rather than hiding it: an operator
              * looking at the device should be able to see that its stored

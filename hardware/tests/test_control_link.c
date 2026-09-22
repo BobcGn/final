@@ -1198,6 +1198,41 @@ static void test_buzzer_policy(void)
     CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 0U));
     CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
 
+    TEST_CASE("applying a threshold command clears mute so a continuing gas alarm sounds buzzer");
+    {
+        uint8_t frame[FRAME_BUFFER_SIZE];
+        char json[CONTROL_JSON_MAX];
+        Capture capture;
+        uint32_t length;
+
+        /* Gas alarm is active at 100 ppm, then muted by operator. */
+        EnvMonitorPushGas(&fixture.monitor, 1000U);
+        EnvMonitorSetGasEstimate(&fixture.monitor, 100U);
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 0U);
+        CHECK_TRUE(evaluation.buzzer_on);
+        EnvMonitorSetMuted(&fixture.monitor, true);
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 100U);
+        CHECK_FALSE(evaluation.buzzer_on);
+        CHECK_TRUE(EnvMonitorMuted(&fixture.monitor));
+
+        /* Now backend pushes new thresholds (e.g. gasHighPpm: 50, version 10). */
+        ControlLinkSetOnline(&fixture.link, true);
+        capture_reset(&capture);
+        build_thresholds_json(json, sizeof(json), "MCU001", "REQ-GAS-UNMUTE", 10U, "30.0", "80.0", "50.0");
+        length = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 20U, 1U,
+                                   (const uint8_t *)json, (uint32_t)strlen(json));
+        (void)ControlLinkHandleBuffer(&fixture.link, frame, length, 0U, 0U, fixture.ack,
+                                      sizeof(fixture.ack), capture_visit, &capture);
+        check_ack(&capture, "applied", NULL, "REQ-GAS-UNMUTE");
+        CHECK_FALSE(EnvMonitorMuted(&fixture.monitor));
+
+        /* Immediately evaluate at 100 ppm: buzzer_on and BuzzerDrive must be active */
+        evaluation = EnvMonitorEvaluate(&fixture.monitor, 200U);
+        CHECK_TRUE(EnvAlarmHas(evaluation.alarm_causes, ENV_ALARM_GAS_HIGH));
+        CHECK_TRUE(evaluation.buzzer_on);
+        CHECK_TRUE(EnvMonitorBuzzerDrive(&evaluation, 0U));
+    }
+
     TEST_CASE("a null evaluation is refused rather than dereferenced");
     CHECK_FALSE(EnvMonitorBuzzerDrive(NULL, 0U));
 }

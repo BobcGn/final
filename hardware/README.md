@@ -392,7 +392,7 @@ cmake --build hardware/build/host-tests-coverage
 
 该脚本使用 clang 的 profile 格式与 `llvm-profdata`/`llvm-cov`：macOS 上 clang 写出的文件名是 `<name>.c.gcno`，而 `gcov` 查找 `<name>.gcno`，因此 `--coverage` + gcov 无法读取自己产生的数据。
 
-最新一次本机结果（macOS / Apple clang，2026-09-22）：1118 项断言全部通过；`core/` 聚合 **91% 行覆盖**。本轮新增/修改的部分：`core/control_link.c` 95.3% 行 / 100% 函数，`core/mqtt_packet.c` 91.6%（`MqttForEachPacket` 全分支），`core/env_monitor.c` 97.8%（`EnvMonitorBuzzerDrive` 全分支），`core/display_model.c` 100%。`core/command_json.c` 全文件 86.6%，其中本轮改动的区域 100%——其余未覆盖行是既有的解析错误路径。逐模块数字见脚本输出。
+最新一次本机结果（macOS / Apple clang，2026-09-22）：1206 项断言全部通过；`core/` 聚合 **91% 行覆盖**。本轮新增/修改的部分：`core/env_monitor.c` 阈值变更时重置静音状态并清除 `previous_causes`，确保新阈值生效后立即重新评估报警并触发蜂鸣器；`STM32_Project1/main.c` 修正 OLED `display.buzzer_active` 状态绑定，展示持续告警态而非 200 ms 瞬时脉冲；新增阈值下发自动恢复蜂鸣器驱动的回归测试。逐模块数字见脚本输出。
 
 **主机测试不能替代实机验证。** 它证明的是判断逻辑本身正确，不能证明 DHT11 时序、MQ135 预热与标定、OLED 刷新、ESP8266 连接或电气连接在现场可用。见下文「已知限制」。
 

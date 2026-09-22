@@ -171,6 +171,12 @@ bool EnvMonitorSetThresholds(EnvMonitor *monitor, const EnvThresholds *threshold
 
     monitor->thresholds = *thresholds;
     monitor->threshold_version = version;
+    /* Updating thresholds establishes a new baseline for alarm evaluation.
+     * Reset any prior mute and clear previous causes so that if the current
+     * environment violates the newly configured limits, the alarm is evaluated
+     * fresh as a new cause and the buzzer is immediately active. */
+    monitor->muted = false;
+    monitor->previous_causes = ENV_ALARM_NONE;
     return true;
 }
 

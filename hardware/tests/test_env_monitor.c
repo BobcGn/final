@@ -478,6 +478,37 @@ static void test_mute_semantics(void)
     CHECK_FALSE(result.local_alarm);
     CHECK_FALSE(result.buzzer_on);
     CHECK_TRUE(EnvMonitorMuted(&monitor));
+
+    TEST_CASE("updating thresholds resets mute and clears previous causes so new alarm sounds");
+    {
+        EnvThresholds new_thresholds;
+        EnvMonitorInit(&monitor);
+        EnvMonitorPushGas(&monitor, 1000U);
+        EnvMonitorSetGasEstimate(&monitor, 100U);
+        EnvMonitorPushClimate(&monitor, 25U, 50U, 1U, 1000U);
+        /* Alarm at 100 ppm when default is 20 ppm */
+        result = EnvMonitorEvaluate(&monitor, 1000U);
+        CHECK_TRUE(result.buzzer_on);
+        /* Mute the active alarm */
+        EnvMonitorSetMuted(&monitor, true);
+        result = EnvMonitorEvaluate(&monitor, 1100U);
+        CHECK_FALSE(result.buzzer_on);
+        CHECK_TRUE(EnvMonitorMuted(&monitor));
+
+        /* Now update thresholds: gas_high_ppm = 80 ppm.
+         * The new thresholds must reset mute and clear previous causes. */
+        EnvMonitorThresholds(&monitor, &new_thresholds);
+        new_thresholds.gas_high_ppm = 80U;
+        CHECK_TRUE(EnvMonitorSetThresholds(&monitor, &new_thresholds, 2U));
+        CHECK_FALSE(EnvMonitorMuted(&monitor));
+
+        /* Next evaluation at 100 ppm must immediately alarm and sound buzzer */
+        result = EnvMonitorEvaluate(&monitor, 1200U);
+        CHECK_TRUE(result.local_alarm);
+        CHECK_TRUE(EnvAlarmHas(result.alarm_causes, ENV_ALARM_GAS_HIGH));
+        CHECK_TRUE(result.buzzer_on);
+        CHECK_TRUE(result.new_cause);
+    }
 }
 
 /* Exercise the wrap-safe history scan. The millisecond counter wraps about
