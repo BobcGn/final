@@ -269,11 +269,11 @@ func (e *Engine) applyRecovery(window *deviceWindow, input Input, eventTime time
 // reports false when the window is too small to describe a trend at all.
 //
 // Design Rationale:
-// 1. Gas baseline uses the median of the earliest window segment (len/3) rather than
-//    a simple average to stay immune to solitary outlier spikes (e.g. temporary
-//    chemical solvent bottle opening).
-// 2. Gas difference is evaluated in 12-bit ADC raw codes (0..4095) rather than uncalibrated
-//    ppm estimates to eliminate sensor calibration drift.
+//  1. Gas baseline uses the median of the earliest window segment (len/3) rather than
+//     a simple average to stay immune to solitary outlier spikes (e.g. temporary
+//     chemical solvent bottle opening).
+//  2. Gas difference is evaluated in 12-bit ADC raw codes (0..4095) rather than uncalibrated
+//     ppm estimates to eliminate sensor calibration drift.
 func (e *Engine) measure(window *deviceWindow) (domain.AlertEvidence, bool) {
 	samples := window.samples
 	if len(samples) < MinBaselineSamples+1 {
