@@ -31,6 +31,10 @@ static DisplayInput quiet_input(void)
     input.network = DISPLAY_NETWORK_LINKED;
     input.wifi_ssid = "Lab";
     input.server_message = "";
+    /* Quiet by default: the receive-loss line only appears when the radio has
+     * actually dropped something. */
+    input.rx_discarded = 0U;
+    input.rx_truncated = 0U;
     return input;
 }
 
@@ -317,6 +321,34 @@ static void test_network_page(void)
     input.server_message = NULL;
     DisplayModelRender(DISPLAY_PAGE_NETWORK, &input, &frame);
     CHECK_TRUE(strncmp(frame.lines[1], "msg:", 4) == 0);
+
+    TEST_CASE("a counted receive loss is shown on the last line");
+    /* The message tail is displaced on purpose: the counter is the only
+     * on-device evidence that a control frame did not arrive, whereas the
+     * message is stale decoration. */
+    input.server_message = "hello";
+    input.rx_discarded = 3U;
+    input.rx_truncated = 1U;
+    DisplayModelRender(DISPLAY_PAGE_NETWORK, &input, &frame);
+    check_line_shape(&frame, 3U);
+    CHECK_TRUE(strncmp(frame.lines[3], "RX D003 TR001", 13) == 0);
+
+    TEST_CASE("a loss on its own does not need a server message");
+    input.server_message = NULL;
+    DisplayModelRender(DISPLAY_PAGE_NETWORK, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[3], "RX D003 TR001", 13) == 0);
+
+    TEST_CASE("a truncation on its own is shown too");
+    input.rx_discarded = 0U;
+    input.rx_truncated = 2U;
+    DisplayModelRender(DISPLAY_PAGE_NETWORK, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[3], "RX D000 TR002", 13) == 0);
+
+    TEST_CASE("a quiet radio leaves the last message line alone");
+    input.rx_truncated = 0U;
+    input.server_message = "hello";
+    DisplayModelRender(DISPLAY_PAGE_NETWORK, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[3], " ", 1) == 0);
 }
 
 /* Exercise the empty state used before the first reading. */

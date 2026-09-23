@@ -6,12 +6,12 @@
 4. 不得为了所谓“最佳实践”引入当前阶段不需要的框架、目录、抽象或依赖。
 5. `hardware`、`backend`、`client-kmp` 与 `client-wx-native` 必须保持清晰边界。
 6. 跨一级目录修改前必须说明原因、影响和涉及的事实源。
-7. API、设备协议与 Domain Model 是跨模块事实源；当前草案分别记录在 `docs/api/openapi.yaml` 与 `docs/device-protocol.md`，冻结前不得自行假定稳定契约。
+7. API、设备协议与 Domain Model 是跨模块事实源，已冻结为 `docs/api/openapi.yaml`（v1.0.0）与 `docs/device-protocol.md`（v1.0.0-frozen）；修改必须走各自变更流程并同步受影响模块，不得单方面扩展或假定契约。
 8. `hardware` 现有代码默认视为高复用资产，优先保留和验证。
 9. `client-kmp` 与 `client-wx-native` 必须保持独立，不得互相复制内部实现形成隐式耦合。
-10. 当前阶段为方案与接口契约设计阶段；允许建立最小可测试路由骨架和文档，不实现数据库、MQTT Broker 接入、WebSocket 推送或客户端业务页面。
+10. 当前已进入实现与验收阶段：PostgreSQL 持久化、MQTT 接入、WebSocket 推送与两套客户端业务页面均已实现；新增能力必须带文档与测试，不得回退到占位实现。
 11. 项目主题为智慧机房/实验室微环境动环监控与早期火情预警，目标链路为 Hardware → ESP8266/MQTT → EMQX → Go Backend → Client。
-12. 必须区分仓库现状与目标态：现有硬件使用 STM32F10x Standard Peripheral Library、DHT11 和 ESP8266 TCP 文本帧；HAL、MQTT、远程阈值持久化仍是待实施目标。
+12. 必须区分仓库现状与目标态：现有硬件使用 STM32F10x Standard Peripheral Library 与 DHT11，设备端已用 MCU 侧 MQTT 3.1.1 编解码经 ESP8266 TCP 透传接入 EMQX，远程阈值持久化已实机验收（2026-09-22）；HAL 迁移不是当前目标，旧 TCP 文本帧仅为遗留代码。
 
 ## Multica Collaboration
 

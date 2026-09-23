@@ -77,6 +77,11 @@ _Static_assert(HUMIDITY_HIGH_THRESHOLD_RH <= 100U, "the default humidity limit m
 _Static_assert(GAS_HIGH_THRESHOLD_PPM >= 1U && GAS_HIGH_THRESHOLD_PPM <= 999U, "the default gas limit must be inside the accepted range");
 _Static_assert(TEMP_RISE_THRESHOLD_C > 0U, "a zero temperature rise threshold would alarm continuously");
 _Static_assert(GAS_RISE_THRESHOLD_ADC > 0U, "a zero gas rise threshold would alarm continuously");
+/* The buzzer cadence divides by its period, so a zero period would be a division
+ * by zero on the device, and an on-time at least as long as the period would
+ * turn the intermittent warning into a continuous one. */
+_Static_assert(GAS_BUZZER_PERIOD_TICKS > 0U, "a zero buzzer period would divide by zero");
+_Static_assert(GAS_BUZZER_ON_TICKS < GAS_BUZZER_PERIOD_TICKS, "the buzzer would sound continuously");
 
 /* Alarm causes. The values are a bitmask and the names match the frozen
  * `alarmCauses` strings one for one, so the payload encoder is a direct mapping
@@ -248,5 +253,27 @@ EnvEvaluation EnvMonitorEvaluate(EnvMonitor *monitor, uint32_t now_ms);
 
 /* Report whether a cause bit is set in a cause mask. */
 bool EnvAlarmHas(uint32_t causes, EnvAlarmCause cause);
+
+/* Decide whether the buzzer must be driven on this main-loop tick.
+ *
+ * The rule has three parts and all three are safety-relevant, which is why it
+ * lives here rather than in the loop where it could only be checked by watching
+ * a board:
+ *
+ *   1. only gas-related causes are audible. Temperature, humidity and sensor
+ *      faults keep their LED, OLED and telemetry causes but stay silent, because
+ *      the audible warning is reserved for the failure that needs someone in the
+ *      room immediately.
+ *   2. while such a cause is active and not muted, the buzzer sounds for
+ *      GAS_BUZZER_ON_TICKS of every GAS_BUZZER_PERIOD_TICKS loop ticks. At the
+ *      firmware's 100 ms tick that is 200 ms on and 800 ms off, which is
+ *      unmistakable without being a continuous tone.
+ *   3. a mute suppresses the output entirely, and `evaluation.buzzer_on` is what
+ *      carries that, so a mute can never be bypassed by the cadence.
+ *
+ * `tick` is the main-loop counter, which is why the cadence is expressed in
+ * ticks: the loop's period is nominal and a millisecond timer would suggest a
+ * precision the busy-wait loop does not have. */
+bool EnvMonitorBuzzerDrive(const EnvEvaluation *evaluation, uint32_t tick);
 
 #endif /* __ENV_MONITOR_H */

@@ -715,8 +715,10 @@ func TestBrokerFailureIsA503(t *testing.T) {
 	}
 }
 
-// TestAlertsListingAndFilters verifies the alert route, including that the
-// evidence travels with the event.
+// TestAlertsListingAndFilters verifies the alert route, including the exact
+// evidence key names written on the wire. The raw-key assertion is deliberate:
+// encoding/json accepts PascalCase input for a camelCase-tagged Go field, which
+// is how the original contract violation escaped a struct-based test.
 func TestAlertsListingAndFilters(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
@@ -768,7 +770,7 @@ func TestAlertsListingAndFilters(t *testing.T) {
 		} `json:"items"`
 		NextCursor *string `json:"nextCursor"`
 	}
-	decode(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts", "", nil), &page)
+	decodeAlertPage(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts", "", nil), &page)
 
 	if len(page.Items) != 1 {
 		t.Fatalf("alerts = %+v", page.Items)
@@ -790,7 +792,7 @@ func TestAlertsListingAndFilters(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	decode(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts?active=true", "", nil), &active)
+	decodeAlertPage(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts?active=true", "", nil), &active)
 	if len(active.Items) != 1 {
 		t.Fatalf("active filter returned %d alerts", len(active.Items))
 	}
@@ -800,7 +802,7 @@ func TestAlertsListingAndFilters(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	decode(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts?state=recovered", "", nil), &recovered)
+	decodeAlertPage(t, e.do(t, http.MethodGet, "/api/v1/devices/MCU001/alerts?state=recovered", "", nil), &recovered)
 	if len(recovered.Items) != 0 {
 		t.Fatalf("state filter returned %d alerts, want none", len(recovered.Items))
 	}
@@ -812,6 +814,49 @@ func TestAlertsListingAndFilters(t *testing.T) {
 	}
 	if stored.ID != event.ID {
 		t.Fatalf("the API reported %s while the store holds %s", event.ID, stored.ID)
+	}
+}
+
+// decodeAlertPage reads a real GET /alerts response, checks its raw JSON keys,
+// then decodes the same bytes into the caller's semantic assertion type.
+func decodeAlertPage(t *testing.T, response *http.Response, target any) {
+	t.Helper()
+
+	defer func() { _ = response.Body.Close() }()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read alert page: %v", err)
+	}
+	var page struct {
+		Items []struct {
+			Evidence map[string]json.RawMessage `json:"evidence"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatalf("decode raw alert page %s: %v", raw, err)
+	}
+	want := map[string]bool{
+		"gasAdcRise": true, "gasAdcRiseThreshold": true,
+		"temperatureRateCPerMinute": true, "temperatureRateThresholdCPerMinute": true,
+		"sampleCount": true, "windowSeconds": true,
+	}
+	for _, item := range page.Items {
+		if len(item.Evidence) != len(want) {
+			t.Errorf("evidence keys = %v, want exactly the six contract keys", item.Evidence)
+		}
+		for key := range want {
+			if _, ok := item.Evidence[key]; !ok {
+				t.Errorf("evidence is missing contract key %q; got %v", key, item.Evidence)
+			}
+		}
+		for key := range item.Evidence {
+			if !want[key] {
+				t.Errorf("evidence contains non-contract key %q", key)
+			}
+		}
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		t.Fatalf("decode alert page %s: %v", raw, err)
 	}
 }
 

@@ -289,6 +289,42 @@ static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
  * Preserving the downlink message keeps the behaviour the firmware had before
  * the carousel existed: the panel was the only place a server message could be
  * seen. */
+/* Build the receive-loss line: "RX DROP 3 TRUNC 1", abbreviated to fit the
+ * sixteen-character panel. The counts are zero-padded so the line does not jump
+ * as they grow, and the fields keep their columns from the right. */
+static void render_receive_loss(char *line, uint32_t discarded, uint32_t truncated)
+{
+    char discarded_field[8];
+    char truncated_field[8];
+    char body[DISPLAY_LINE_BUFFER];
+    uint32_t position = 0U;
+    const char *text;
+
+    (void)TextFormatZeroPadded(discarded_field, sizeof(discarded_field), discarded, 3U);
+    (void)TextFormatZeroPadded(truncated_field, sizeof(truncated_field), truncated, 3U);
+
+    /* Assembled by hand rather than with a printf: the firmware links against
+     * -nostdlib and the two integers are the whole of the line. */
+    for (text = "RX D"; *text != '\0' && position < DISPLAY_LINE_LENGTH; text++)
+    {
+        body[position++] = *text;
+    }
+    for (text = discarded_field; *text != '\0' && position < DISPLAY_LINE_LENGTH; text++)
+    {
+        body[position++] = *text;
+    }
+    for (text = " TR"; *text != '\0' && position < DISPLAY_LINE_LENGTH; text++)
+    {
+        body[position++] = *text;
+    }
+    for (text = truncated_field; *text != '\0' && position < DISPLAY_LINE_LENGTH; text++)
+    {
+        body[position++] = *text;
+    }
+    body[position] = '\0';
+    line_set(line, body);
+}
+
 static void render_network(const DisplayInput *input, DisplayFrame *frame)
 {
     const char *prefix = "Linking:";
@@ -342,6 +378,17 @@ static void render_network(const DisplayInput *input, DisplayFrame *frame)
             break;
         }
     }
+
+    /* A counted receive loss displaces the last line, including the tail of a
+     * long server message. That ordering is deliberate: the message is stale
+     * decoration, whereas the counter is the only evidence on the device that a
+     * control frame did not arrive, and a tester reading zero here has evidence
+     * that nothing was lost. */
+    if (input->rx_discarded != 0U || input->rx_truncated != 0U)
+    {
+        render_receive_loss(frame->lines[DISPLAY_LINE_COUNT - 1U], input->rx_discarded,
+                            input->rx_truncated);
+    }
 }
 
 void DisplayModelNextPage(DisplayPage *page)
@@ -381,6 +428,8 @@ void DisplayModelRender(DisplayPage page, const DisplayInput *input, DisplayFram
         empty.network = DISPLAY_NETWORK_LINKING;
         empty.wifi_ssid = "";
         empty.server_message = "";
+        empty.rx_discarded = 0U;
+        empty.rx_truncated = 0U;
         input = &empty;
     }
 

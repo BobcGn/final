@@ -3,7 +3,7 @@
 > 事实源：[`api.md`](api.md)、[`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)
 > 前端实现：`client-wx-native/`，数据经 `services/monitoring.js`（契约 + 网络）与 `utils/presentation.js`（展示派生）
 > 对齐基准：`client-kmp` 共享层（`MonitoringClient` + `MonitoringPresentation`），两端对同一份数据的示数与实时行为必须一致
-> 当前状态：后端除 `GET /healthz` 外返回 501；前端 `config/env.js` 的 `useMock: true` 走本地 Mock
+> 当前状态：后端**全部路由已实现**（2026-09-22）；前端 `config/env.js` 的 `useMock` 仍为 `true`，联调时置为 `false`
 
 ---
 
@@ -12,19 +12,19 @@
 | # | 接口 | 前端方法（services/monitoring.js） | 使用页面 | 后端现状 |
 |---|---|---|---|---|
 | 1 | `GET /healthz` | 未接入 | — | Implemented |
-| 2 | `GET /api/v1/devices/{id}/status` | `loadDashboard()` | 机房环境总览 | 501 |
-| 3 | `GET /api/v1/devices/{id}/telemetry/latest` | `loadDashboard()`（404 = 空态） | 机房环境总览 | 501 |
-| 4 | `GET /api/v1/devices/{id}/telemetry` | `loadTrends()` | 历史趋势 | 501 |
-| 5 | `GET /api/v1/devices/{id}/alerts` | `loadAlerts()` | 告警记录 | 501 |
-| 6 | `GET /api/v1/devices/{id}/thresholds` | `loadSettings()` | 预警阈值 | 501 |
-| 7 | `PUT /api/v1/devices/{id}/thresholds` | `updateThresholds()` | 预警阈值（保存） | 501 |
-| 8 | `POST /api/v1/devices/{id}/commands/mute` | `setMuted()` | 机房环境总览（远程静音） | 501 |
-| 9 | `GET /api/v1/devices/{id}/commands/{requestId}` | `loadCommandStatus()` / `awaitCommandOutcome()` | 控制命令终态（两个控制入口共用） | 501 |
+| 2 | `GET /api/v1/devices/{id}/status` | `loadDashboard()` | 机房环境总览 | Implemented |
+| 3 | `GET /api/v1/devices/{id}/telemetry/latest` | `loadDashboard()`（404 = 空态） | 机房环境总览 | Implemented |
+| 4 | `GET /api/v1/devices/{id}/telemetry` | `loadTrends()` | 历史趋势 | Implemented |
+| 5 | `GET /api/v1/devices/{id}/alerts` | `loadAlerts()` | 告警记录 | Implemented |
+| 6 | `GET /api/v1/devices/{id}/thresholds` | `loadSettings()` | 预警阈值 | Implemented |
+| 7 | `PUT /api/v1/devices/{id}/thresholds` | `updateThresholds()` | 预警阈值（保存） | Implemented |
+| 8 | `POST /api/v1/devices/{id}/commands/mute` | `setMuted()` | 机房环境总览（远程静音） | Implemented |
+| 9 | `GET /api/v1/devices/{id}/commands/{requestId}` | `loadCommandStatus()` / `awaitCommandOutcome()` | 控制命令终态（两个控制入口共用） | Implemented |
 
 `{id}` 固定为 `MCU001`，必须匹配 `^[A-Za-z0-9_-]{1,32}$`。
 
-> 本端**不使用** `GET /ws/v1/devices/{id}/telemetry`：KMP 方案不含实时订阅，
-> 且该路由未实现；依赖它会让刷新退化到兜底间隔。实时性由 3 秒快照轮询保证（见第 7 节）。
+> 本端**不使用** `GET /ws/v1/devices/{id}/telemetry`：KMP 方案不含实时订阅，实时性由 3 秒快照轮询保证（见第 7 节）。
+> 该路由后端已实现；若两端各用一套推送/轮询，刷新节奏会再次不一致，接入需作为独立提案并保留轮询兜底。
 
 ---
 
@@ -187,7 +187,7 @@
 | 生命周期 | `onShow` 启动、`onHide`/`onUnload` 停止 |
 | 重复请求保护 | 上一轮未返回则跳过本轮 |
 | 失败处理 | 写入 `error`，轮询继续 |
-| 不使用 WebSocket | KMP 方案无实时订阅，且 `ws/v1` 未实现；接入需独立提案并保留轮询兜底 |
+| 不使用 WebSocket | KMP 方案无实时订阅（后端已实现 `ws/v1` 但未采用）；接入需独立提案并保留轮询兜底 |
 
 ---
 

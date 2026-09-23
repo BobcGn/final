@@ -113,9 +113,28 @@ typedef struct
  * window, and compares `threshold_version` against the version in force only
  * when the caller passes a non-zero `current_threshold_version`. Pass 0 to skip
  * that comparison, for example when the command is being inspected without being
- * applied. */
+ * applied.
+ *
+ * The control path passes 0 and applies CommandCheckThresholdVersion itself,
+ * because docs/device-protocol.md §4.1 orders the requestId deduplication check
+ * before the range and version checks: comparing here would answer a redelivered
+ * threshold command with stale_version instead of duplicate, and a backend that
+ * already recorded the command as applied would read that as a fresh failure. */
 CommandResult CommandJsonParse(const char *json, uint32_t length, const char *device_id,
                               uint32_t current_threshold_version, ControlCommand *command);
+
+/* Report whether a threshold command's version moves the configuration forward.
+ *
+ * Returns COMMAND_RESULT_REJECTED_STALE_VERSION when the command claims a version
+ * that is not newer than the one in force, and COMMAND_RESULT_APPLIED otherwise —
+ * including for a command that is not a threshold set at all, which has no
+ * version to order. A zero `current_threshold_version` skips the comparison, for
+ * a caller inspecting a command without applying it.
+ *
+ * The parser applies this too, so the ordering rule has one implementation and
+ * the control path only decides *when* to ask. */
+CommandResult CommandCheckThresholdVersion(const ControlCommand *command,
+                                          uint32_t current_threshold_version);
 
 /* Return true when a received command is still inside its window. The caller
  * passes the uptime recorded when the command arrived. */
@@ -158,8 +177,10 @@ typedef struct
     uint32_t uptime_ms;
     const char *request_id;
     CommandResult result;
-    /* Threshold version in force after the command, or 0 when the command did
-     * not concern thresholds. */
+    /* Threshold version to report. It is emitted for a threshold command whose
+     * result is applied or duplicate — the newly applied version and the version
+     * currently in force respectively — and is written as null for every other
+     * combination, including any mute command. Pass 0 to force null. */
     uint32_t threshold_version;
 } CommandAckPayload;
 

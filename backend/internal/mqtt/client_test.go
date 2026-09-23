@@ -324,6 +324,13 @@ func TestConfigValidation(t *testing.T) {
 			Address:  "127.0.0.1:1883",
 			ClientID: "0123456789012345678901234",
 		},
+		// The CONNECT field is whole seconds, so a sub-second keep-alive would be
+		// negotiated as zero while the client still pinged at a fraction of one.
+		"keep alive below one second": {
+			Address:   "127.0.0.1:1883",
+			ClientID:  "lab-backend",
+			KeepAlive: 200 * time.Millisecond,
+		},
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {

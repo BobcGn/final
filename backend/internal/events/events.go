@@ -102,13 +102,31 @@ type Sink interface {
 	PublishThresholdsConfirmed(ctx context.Context, deviceID string, version int)
 }
 
+// AlertEvidenceData is the wire shape of an alert's trigger evidence in the
+// realtime stream.
+//
+// It mirrors api.alertEvidenceResource rather than reusing it, because the two
+// packages are separate contracts: one is a REST response body and one is a
+// WebSocket event body, and coupling them through a shared type would mean a
+// change to either shape is silently applied to both. The names are the ones
+// docs/api/openapi.yaml fixes, written out as tags so a Go rename cannot change
+// what a client sees.
+type AlertEvidenceData struct {
+	GasAdcRise                         int     `json:"gasAdcRise"`
+	GasAdcRiseThreshold                int     `json:"gasAdcRiseThreshold"`
+	TemperatureRateCPerMinute          float64 `json:"temperatureRateCPerMinute"`
+	TemperatureRateThresholdCPerMinute float64 `json:"temperatureRateThresholdCPerMinute"`
+	SampleCount                        int     `json:"sampleCount"`
+	WindowSeconds                      int     `json:"windowSeconds"`
+}
+
 // AlertData is the payload of alert.state_changed.
 type AlertData struct {
-	ID        string               `json:"id"`
-	State     domain.AlertState    `json:"state"`
-	StartedAt time.Time            `json:"startedAt"`
-	EndedAt   *time.Time           `json:"endedAt"`
-	Evidence  domain.AlertEvidence `json:"evidence"`
+	ID        string            `json:"id"`
+	State     domain.AlertState `json:"state"`
+	StartedAt time.Time         `json:"startedAt"`
+	EndedAt   *time.Time        `json:"endedAt"`
+	Evidence  AlertEvidenceData `json:"evidence"`
 }
 
 // CommandStatusData is the payload of command.status_changed.
@@ -144,14 +162,23 @@ func TelemetryDataFrom(sample domain.Telemetry) TelemetryData {
 	}
 }
 
-// AlertDataFrom builds the alert event body.
+// AlertDataFrom builds the alert event body. Evidence is copied field by field so
+// that a new domain field cannot reach the wire before it is given a name in the
+// contract.
 func AlertDataFrom(event domain.AlertEvent) AlertData {
 	return AlertData{
 		ID:        event.ID,
 		State:     event.State,
 		StartedAt: event.StartedAt,
 		EndedAt:   event.EndedAt,
-		Evidence:  event.Evidence,
+		Evidence: AlertEvidenceData{
+			GasAdcRise:                         event.Evidence.GasAdcRise,
+			GasAdcRiseThreshold:                event.Evidence.GasAdcRiseThreshold,
+			TemperatureRateCPerMinute:          event.Evidence.TemperatureRateCPerMinute,
+			TemperatureRateThresholdCPerMinute: event.Evidence.TemperatureRateThresholdCPerMinute,
+			SampleCount:                        event.Evidence.SampleCount,
+			WindowSeconds:                      event.Evidence.WindowSeconds,
+		},
 	}
 }
 

@@ -1,5 +1,6 @@
 package org.example.client_kmp
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -38,17 +39,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import org.example.client_kmp.monitoring.AlertFilter
 import org.example.client_kmp.monitoring.AlertItemView
 import org.example.client_kmp.monitoring.AlertsView
+import org.example.client_kmp.monitoring.ChartSeries
 import org.example.client_kmp.monitoring.CurveLegend
 import org.example.client_kmp.monitoring.DashboardView
 import org.example.client_kmp.monitoring.MetricSummary
@@ -59,6 +66,7 @@ import org.example.client_kmp.monitoring.SettingsView
 import org.example.client_kmp.monitoring.ThresholdLimits
 import org.example.client_kmp.monitoring.ThresholdUpdate
 import org.example.client_kmp.monitoring.Tone
+import org.example.client_kmp.monitoring.TrendChartGeometry
 import org.example.client_kmp.monitoring.TrendWindow
 import org.example.client_kmp.monitoring.TrendsView
 
@@ -76,6 +84,13 @@ private val Info = Color(0xFF7DD3FC)
 // primary button, with the on-colour it pairs with.
 private val ActiveStart = Color(0xFF45F0CB)
 private val ActiveEnd = Color(0xFF16B98B)
+
+/**
+ * Failure copy for a history fetch that did not produce data. Kept constant and
+ * distinct from the empty-success wording so a network error is never read as
+ * "this window has no samples".
+ */
+private const val HISTORY_LOAD_ERROR = "历史数据加载失败，点击时间窗可重试"
 
 /** Backend address reachable from the Android emulator; the host is `10.0.2.2`. */
 private const val EMULATOR_BASE_URL = "http://10.0.2.2:8080"
@@ -284,24 +299,43 @@ private fun Meter(letter: String, label: String, value: String, unit: String, pe
  * The trends page.
  *
  * The page's shape is the frozen baseline's: a window selector, three statistic
- * cards, then the curve block. The block is a placeholder rather than a list of
- * samples — a table of readings is not a trend curve, and showing one where the
- * curve belongs would report an unfinished design goal as met. See
- * [CurvePlaceholder].
+ * cards, then the curve block. The curve block is a chart, not a list of
+ * samples — a table of readings is not a trend curve.
  */
 @Composable
 private fun TrendsScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<TrendsView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var window by remember { mutableStateOf(TrendWindow.LAST_HOUR) }
+    // Re-tapping the active window does not change `window`, so the effect key
+    // alone would never refetch. This tick bumps on every tap to force a reload.
+    var retryTick by remember { mutableStateOf(0) }
     // The window is the effect key, so tapping a range cancels the in-flight fetch
     // for the previous one instead of letting two responses race for one state.
-    LaunchedEffect(window) {
-        view = null
+    LaunchedEffect(window, retryTick) {
+        // Clear immediately when the window changed so the previous window's
+        // curve is never left on screen masquerading as the newly selected one.
+        // A same-window refresh (retryTick bump) keeps the old content as a
+        // loading transition only; failure still clears it below.
+        if (view?.windowKey != window.name) {
+            view = null
+        }
         error = null
-        runCatching { client.loadTrends(window) }
-            .onSuccess { view = it }
-            .onFailure { error = it.message }
+        try {
+            view = client.loadTrends(window)
+            error = null
+        } catch (e: CancellationException) {
+            // Propagate structured-concurrency cancellation. Swallowing it here
+            // would let a cancelled fetch write `error` over the new window's state.
+            throw e
+        } catch (e: Exception) {
+            // Failure strategy (identical on Android / MiniApp / wx-native): do
+            // not keep the old curve looking like the new window. Clear it and
+            // show an explicit failure message the user can act on. Empty success
+            // stays a separate state ("所选区间内没有遥测样本").
+            view = null
+            error = HISTORY_LOAD_ERROR
+        }
     }
     Page("历史趋势", "数据统计与曲线") {
         // The selector renders before the data arrives: it is the control the user
@@ -310,10 +344,28 @@ private fun TrendsScreen(client: MonitoringClient) {
         Segmented(
             options = view?.windowOptions ?: MonitoringPresentation.trendWindowOptions(),
             activeKey = window.name,
-            onSelect = { key -> TrendWindow.entries.firstOrNull { it.name == key }?.let { window = it } },
+            onSelect = { key ->
+                TrendWindow.entries.firstOrNull { it.name == key }?.let { selected ->
+                    if (selected == window) {
+                        // Re-tap the active window: retry the same window.
+                        retryTick += 1
+                    } else {
+                        window = selected
+                    }
+                }
+            },
         )
         if (view == null && error == null) Hint("数据加载中…")
-        error?.let { Hint(it, Danger) }
+        error?.let { message ->
+            Hint(message, Danger)
+            // Retry re-runs the same window without changing the selection.
+            Text(
+                "点击上方时间窗可重试",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         view?.let { data ->
             if (!data.hasData) {
                 Hint("所选区间内没有遥测样本")
@@ -335,7 +387,7 @@ private fun TrendsScreen(client: MonitoringClient) {
                     Hint("${data.sampleCount - data.gasSampleCount} 条样本没有已校准气体读数，未计入气体统计")
                 }
                 SectionTitle("曲线视图", data.curveStatusText)
-                CurvePlaceholder(data)
+                TrendChart(data)
                 Hint(data.footerHint)
             }
         }
@@ -345,34 +397,84 @@ private fun TrendsScreen(client: MonitoringClient) {
 private val EMPTY_SUMMARY = MetricSummary("--", "--", "--", "--")
 
 /**
- * Draws the curve frame both hosts must agree on.
+ * Draws the real telemetry trend chart using Compose Canvas.
  *
- * It is deliberately a frame: a legend, four grid lines, a masked centre note and
- * the two axis labels, with no plotted geometry. `curveReady` is false in the
- * shared model, so this is the honest unfinished state rather than a finished
- * chart with no data. Wiring a real chart replaces the mask and flips the flag.
+ * Each metric is mapped to its own valid range (with 10% padding),
+ * and X coordinates follow actual sampling timestamps. Missing gas readings
+ * break the line rather than connecting across gaps or dropping to zero.
  */
 @Composable
-private fun CurvePlaceholder(data: TrendsView) {
+private fun TrendChart(data: TrendsView) {
     GlassCard {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             data.curveLegend.forEach { LegendDot(it) }
         }
         Box(
-            Modifier.fillMaxWidth().padding(top = 14.dp).height(160.dp)
-                .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(14.dp)),
+            Modifier.fillMaxWidth().padding(top = 14.dp).height(180.dp)
+                .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
+                .padding(horizontal = 8.dp, vertical = 10.dp),
         ) {
-            // `justifyContent: space-between` over four lines, as in the baseline:
-            // the frame reads as a grid without any axis values to label it with.
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-            ) {
-                repeat(4) { Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f))) }
-            }
-            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(data.curveMaskTitle, color = TextSecondary, fontSize = 14.sp)
-                Text(data.curveMaskSub, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            Canvas(Modifier.fillMaxSize()) {
+                val layout = TrendChartGeometry.compute(
+                    points = data.series,
+                    width = size.width,
+                    height = size.height,
+                    padLeft = 4.dp.toPx(),
+                    padRight = 4.dp.toPx(),
+                    padTop = 8.dp.toPx(),
+                    padBottom = 8.dp.toPx(),
+                )
+
+                // 1. Grid lines
+                layout.gridLinesY.forEach { y ->
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.06f),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+
+                // 2. Draw each metric series
+                fun drawSeries(series: ChartSeries, color: Color) {
+                    val strokeWidth = 2.dp.toPx()
+                    val pointRadius = 3.dp.toPx()
+
+                    series.segments.forEach { segment ->
+                        if (segment.size >= 2) {
+                            val path = Path().apply {
+                                moveTo(segment[0].x, segment[0].y)
+                                for (i in 1 until segment.size) {
+                                    lineTo(segment[i].x, segment[i].y)
+                                }
+                            }
+                            drawPath(
+                                path = path,
+                                color = color,
+                                style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                            )
+                        }
+                        segment.forEach { pt ->
+                            drawCircle(
+                                color = color,
+                                radius = pointRadius,
+                                center = Offset(pt.x, pt.y),
+                            )
+                        }
+                    }
+
+                    series.singlePoints.forEach { pt ->
+                        drawCircle(
+                            color = color,
+                            radius = pointRadius + 1.dp.toPx(),
+                            center = Offset(pt.x, pt.y),
+                        )
+                    }
+                }
+
+                drawSeries(layout.temperatureSeries, Danger)
+                drawSeries(layout.humiditySeries, Info)
+                drawSeries(layout.gasSeries, Mint)
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -386,7 +488,12 @@ private fun CurvePlaceholder(data: TrendsView) {
 private fun LegendDot(item: CurveLegend) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(8.dp).background(toneColor(item.tone), CircleShape))
-        Text(item.label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(start = 5.dp))
+        val label = if (item.rangeText.isNotEmpty() && item.rangeText != "--") {
+            "${item.label} (${item.rangeText})"
+        } else {
+            item.label
+        }
+        Text(label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(start = 5.dp))
     }
 }
 

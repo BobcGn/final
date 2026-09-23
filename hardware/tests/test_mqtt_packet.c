@@ -365,6 +365,83 @@ static void test_round_trip(void)
     CHECK_INT(0, strcmp(reason, MQTT_REJECT_UNSUPPORTED));
 }
 
+/* The frame iterator that the control path scans a receive buffer with. */
+static uint32_t g_scanned_frames = 0U;
+static uint16_t g_scanned_last_packet_id = 0U;
+
+static void count_frame(void *context, const MqttPacket *packet)
+{
+    uint32_t *count = (uint32_t *)context;
+
+    (*count)++;
+    g_scanned_frames++;
+    g_scanned_last_packet_id = packet->packet_id;
+}
+
+static void test_for_each_packet(void)
+{
+    uint8_t buffer[256];
+    uint32_t length;
+    uint32_t count = 0U;
+    MqttScanResult result;
+
+    TEST_CASE("an empty or null buffer yields nothing at all");
+    g_scanned_frames = 0U;
+    result = MqttForEachPacket(NULL, 16U, count_frame, &count);
+    CHECK_INT(0U, result.decoded);
+    CHECK_INT(0U, result.undecodable);
+    CHECK_FALSE(result.partial);
+    result = MqttForEachPacket(buffer, 0U, count_frame, &count);
+    CHECK_INT(0U, result.decoded);
+    CHECK_INT(0U, g_scanned_frames);
+
+    TEST_CASE("two frames in one buffer are both handed over, in order");
+    /* PUBACK rather than PINGREQ: the device sends PINGREQ but never receives
+     * one, and the codec refuses what a broker should not have sent. */
+    length = MqttEncodePuback(buffer, sizeof(buffer), 0x0101U);
+    length += MqttEncodePuback(&buffer[length], sizeof(buffer) - length, 0x0102U);
+    result = MqttForEachPacket(buffer, length, count_frame, &count);
+    CHECK_INT(2U, result.decoded);
+    CHECK_INT(0U, result.undecodable);
+    CHECK_FALSE(result.partial);
+    CHECK_INT(0x0102, g_scanned_last_packet_id);
+
+    TEST_CASE("a nil visitor still counts what it found");
+    result = MqttForEachPacket(buffer, length, NULL, NULL);
+    CHECK_INT(2U, result.decoded);
+    CHECK_FALSE(result.partial);
+
+    TEST_CASE("a buffer ending inside a frame is reported as a partial frame");
+    result = MqttForEachPacket(buffer, length - 1U, count_frame, &count);
+    CHECK_INT(1U, result.decoded);
+    CHECK_TRUE(result.partial);
+
+    TEST_CASE("a frame the codec refuses does not stop the scan");
+    /* A SUBSCRIBE is a packet the device should never be sent. Its framing is
+     * intact, so the frame behind it is still a frame the caller should see. */
+    buffer[0] = (uint8_t)(MQTT_PACKET_SUBSCRIBE << 4);
+    buffer[1] = 5U;
+    buffer[2] = 0x00U;
+    buffer[3] = 0x01U;
+    buffer[4] = 0x00U;
+    buffer[5] = 0x00U;
+    buffer[6] = 0x00U;
+    length = 7U + MqttEncodePuback(&buffer[7], sizeof(buffer) - 7U, 0x0203U);
+    result = MqttForEachPacket(buffer, length, count_frame, &count);
+    CHECK_INT(1U, result.decoded);
+    CHECK_INT(1U, result.undecodable);
+    CHECK_FALSE(result.partial);
+
+    TEST_CASE("a declared length the device will never accept is refused unread");
+    buffer[0] = (uint8_t)((MQTT_PACKET_PUBLISH << 4) | 0x02U);
+    buffer[1] = 0xBCU;
+    buffer[2] = 0x05U;
+    result = MqttForEachPacket(buffer, 3U, count_frame, &count);
+    CHECK_INT(0U, result.decoded);
+    CHECK_INT(1U, result.undecodable);
+    CHECK_FALSE(result.partial);
+}
+
 /* Entry point for the mqtt_packet suite. */
 void test_mqtt_packet_suite(void)
 {
@@ -376,5 +453,6 @@ void test_mqtt_packet_suite(void)
     test_decode();
     test_decode_rejections();
     test_total_length();
+    test_for_each_packet();
     test_round_trip();
 }

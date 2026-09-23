@@ -75,6 +75,8 @@ TEST_DATABASE_URL='postgres://postgres:password@localhost:5432/lab_test?sslmode=
 
 内置 MQTT 测试 Broker 的生命周期回归用例可单独运行：`go test -race -count=20 ./internal/mqtt/mqtttest`。它覆盖关闭时并发接入且客户端未发送 CONNECT 的情况，防止测试清理阶段无限等待。
 
+会话保活与 QoS 1 确认的可靠性用例在 `internal/mqtt/keepalive_test.go`。它们针对 SHIXUN-25 的两条硬性要求：会话在多个保活周期内稳定、以及**没有收到 PUBACK 的发布绝不能被记成已发布**。测试 Broker 因此提供了 `Pings()`、`WithholdPubAcks()`、`StopAnswering()`、`AnswerWithPubAck()` 与 `TakeOver` 五个开关，分别对应「ping 是否真的发出」「Broker 收下消息但不确认」「Broker 彻底沉默」「旧会话的确认」与「同 clientId 顶号」。用例全部跑在毫秒级保活上（`KeepAlive=1s`、`PingAfter` 可下调），不靠 `sleep 30 秒` 硬堆。
+
 CI 要求可测试代码总行覆盖率 ≥ 80%，新增/修改的核心逻辑目标 ≥ 90%。覆盖率文件 `coverage.out` 是生成物，不提交。
 
 ## 结构与边界
@@ -132,9 +134,53 @@ backend/
 | GET | `/api/v1/devices/{deviceId}/commands/{requestId}` | 查询命令状态 |
 | GET | `/ws/v1/devices/{deviceId}/telemetry` | WebSocket 实时流 |
 
+## 会话保活、断线检测与重连
+
+MQTT 会话的健康由 `internal/mqtt` 维护，三条规则决定了控制链路是否可靠。
+
+### 保活：空闲驱动，且不卡在边界上
+
+MQTT 3.1.1 §3.1.2.10 要求同一方向上任意两个控制包之间**不超过** 1.5 倍 keep-alive。因此客户端**不**在
+keep-alive 整点上发 PINGREQ：一次调度抖动就会让间隙越过 1.5 倍，Broker 随即关闭连接。实际节奏是
+**空闲驱动**的：
+
+- 任何本端发出的报文都是保活报文，因此应用层的 PUBLISH 会把下一次 PINGREQ 推后，不会在其后紧跟一个多余的 ping；
+- 只有当本端空闲超过 `KeepAlive / 2`（`MQTT_KEEPALIVE_SECONDS` 默认 30 秒 → 15 秒）才发 PINGREQ，等于给链路留下两倍于协议要求的余量；
+- 入站流量不计作保活：客户端只需负责自己这一侧的发送。
+- `KeepAlive` 不得小于 1 秒——CONNECT 字段是整秒，亚秒值会被协商成 0（即完全不保活），而客户端仍会按分数周期 ping，两者就对不上了。
+
+PINGRESP 到达只作为对端仍在读的旁证；缺失的判断交给读超时（`2 × KeepAlive`）。连续两次周期没有入站即视为对端不在。
+
+### 断线检测
+
+读超时（`2 × KeepAlive`）与 TCP EOF 都会终止一次会话，二者都会把所有在途的 QoS 1 等待者以失败结束（见下），
+随后按退避重连。一次会话建立前的失败（拨号失败、CONNACK 被拒、SUBACK 被拒）与一次**已建立后**掉线的处理不同：
+后者立即把退避复位到 `ReconnectMin`，前者才会累积到 `ReconnectMax`。长期故障不会让后来的小抖动也付出 30 秒的代价。
+
+### 重连与订阅
+
+`Connected` 表示 **CONNECT 与 SUBSCRIBE 都已完成**，不是「CONNECT 已确认」。因此 Broker 重启后客户端会重新订阅
+`device/telemetry` 与 `device/command-ack`，而不会在订阅仍处于途中时就报告就绪。同一 clientId 被另一连接顶掉
+（部署重叠、手工起第二个进程）会被当作一次会话丢失处理并自动重连。
+
+### QoS 1 发布的四种结局
+
+控制命令是 QoS 1 的，必须区分下面四种，**任何一种失败都不能算作已发布**：
+
+| 结局 | 含义 |
+| --- | --- |
+| `nil` | Broker 对本连接、本 packet id 回了 PUBACK。消息自此由 Broker 负责。 |
+| `ErrPublishTimeout` | 约定时间内没有任何确认。消息**可能**已被接收。 |
+| `ErrConnectionLost` | 套接字在收到确认前结束。消息**可能**已被接收。 |
+| `ctx.Err()` | 调用方停止等待。 |
+
+等待者按 **(packet id, 连接 epoch)** 两个键登记：一个 epoch 上的 PUBACK 绝不会去确认另一个 epoch 上的发布。
+重连时所有旧 epoch 的等待者一律以 `ErrConnectionLost` 结束，绝不静默记为成功。
+
 ## 运维要点
 
-- **控制命令的 202 不代表设备已执行。** 只有设备 ACK 才会把命令推进到 `applied`；客户端必须等待确认或超时结果。
+- **控制命令的 202 只表示 Broker 已确认接收这次 publish，不代表设备已执行。** 只有 `device/command-ack`
+  才会把命令推进到 `applied`；客户端必须等待确认或超时结果。
 - **未配置 Broker 时控制路由返回 `503 broker_unavailable`**，命令被记录为 `publish_failed` 而不是假装已下发。
 - **过期命令不会被重发。** 设备重连后，`expiresAt` 已过的命令只会被标记为 `timed_out`。
 - **`/healthz` 不检查依赖。** 数据库或 Broker 故障时它仍返回 200；需要 readiness 语义时应新增独立路由。

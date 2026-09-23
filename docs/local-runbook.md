@@ -103,7 +103,7 @@ openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
   -c 'program build/debug/STM32_Project1.elf verify reset exit'
 ```
 
-上电后预期：OLED 轮播数据；完成 Wi-Fi、MQTT CONNACK 和 SUBACK 后显示联网；设备每秒向 `device/telemetry` 发布 QoS 1 JSON。气体超限或气体突增时，PA8/TIM1_CH1 以 2 kHz PWM 间歇发声（200 ms 响、800 ms 停）；其他告警只保持 LED、OLED 和遥测状态。
+上电后预期：OLED 轮播数据；完成 Wi-Fi、MQTT CONNACK 和 SUBACK 后显示联网；设备按当前固件节拍约每 1 秒向 `device/telemetry` 发布 QoS 1 JSON（契约周期为 5 秒，该偏差记录在 `docs/device-protocol.md` §5.2）。气体超限或气体突增时，PA8/TIM1_CH1 以 2 kHz PWM 间歇发声（200 ms 响、800 ms 停）；其他告警只保持 LED、OLED 和遥测状态。
 
 ## 6. 联调检查与停止
 
@@ -125,7 +125,7 @@ docker compose -f deploy/compose.yaml down
 
 ## 7. 当前已知限制
 
-- 真实遥测上行已通；远程静音、阈值写入和设备 ACK 还未接入固件主循环。
+- 遥测上行与下行控制（远程静音、阈值写入、设备 ACK）均已实机验收通过（2026-09-22，见 `hardware/README.md`「实机闭环验收记录」）；遗留：真实拔电后的阈值保持未验收（只做过复位）。
 - DHT11 已在实测板持续读数通过；若第 3 页后续出现 `Sensor: F<code>`，按 `hardware/README.md` 的状态码表检查 PA5、上拉电阻、3.3 V/GND 和传感器型号。
 - 提交版默认关闭上电蜂鸣器自检。蜂鸣器不响时先确认 OLED 报警原因包含 `G` 或 `g`；只有气体超限/突增才会让 PA8/TIM1_CH1 间歇输出。需要隔离检查输出链路时，可临时把 `HARDWARE_SELFTEST_ON_BOOT` 置 1，验收后必须恢复为 0。
 - MQ135 ppm 尚未现场标定，验收时应同时观察原始/滤波 ADC。

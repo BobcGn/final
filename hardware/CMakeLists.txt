@@ -30,6 +30,8 @@ add_executable(${PROJECT_NAME}
     core/telemetry_json.c
     core/command_json.c
     core/mqtt_packet.c
+    core/control_link.c
+    core/session_dispatch.c
     core/threshold_store.c
     core/boot_id.c
     dht11/dht11.c

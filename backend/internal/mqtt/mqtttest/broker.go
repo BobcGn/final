@@ -15,6 +15,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BobcGn/final/backend/internal/mqtt"
 )
@@ -43,12 +44,41 @@ type Broker struct {
 	// RejectSubscriptions makes every SUBSCRIBE fail, used to test that the
 	// client surfaces a refused subscription instead of running blind.
 	RejectSubscriptions bool
+	// WithholdPubAck makes the broker accept a QoS 1 publish and never answer
+	// with its PUBACK. It is how a test observes the client's behaviour for a
+	// message the broker took but has not acknowledged, which is the state a
+	// command must never resolve as success.
+	WithholdPubAck bool
+	// Silence makes the broker stop sending anything at all once a session is
+	// established: no PUBACK, no PINGRESP, no delivery. It is how a test reaches
+	// the client's read deadline without pulling the socket, which is what a
+	// broker that has stopped answering looks like.
+	Silence bool
+	// SpuriousPubAck, when non-zero, is answered instead of the publish's own
+	// packet identifier. It stands in for an acknowledgement belonging to a
+	// different message — the only way a mis-scoped acknowledgement table can be
+	// caught from outside the client.
+	SpuriousPubAck uint16
+	// TakeOver makes a new session with an existing client identifier discard
+	// the old one, which is what a real broker does and what the client has to
+	// recover from. Without it the broker would keep both, and a test could not
+	// observe the client's behaviour across a duplicate identifier.
+	TakeOver bool
+	// rejectConnections makes the broker answer CONNECT with a rejection. It is
+	// changed through RejectConnections so tests can safely turn a once-healthy
+	// broker into a sequence of failed connection attempts.
+	rejectConnections bool
 
-	mu       sync.Mutex
-	conns    map[net.Conn]struct{}
-	sessions map[*session]struct{}
-	observed []Message
-	closed   bool
+	mu           sync.Mutex
+	conns        map[net.Conn]struct{}
+	sessions     map[*session]struct{}
+	observed     []Message
+	connectTimes []time.Time
+	// pings counts every PINGREQ the broker received. A keep-alive loop that
+	// never fires is indistinguishable from one that is never needed without a
+	// count, and the distinction is the whole point of the idle-driven cadence.
+	pings  int
+	closed bool
 
 	wg sync.WaitGroup
 }
@@ -107,6 +137,73 @@ func (b *Broker) ObservedOn(topic string) []Message {
 		}
 	}
 	return matched
+}
+
+// Pings returns how many PINGREQ the broker has received. A keep-alive that
+// never fires and one that is never needed look identical without a count.
+func (b *Broker) Pings() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pings
+}
+
+// RejectConnections controls whether CONNECT is refused. Existing sessions are
+// not affected until they reconnect.
+func (b *Broker) RejectConnections(reject bool) {
+	b.mu.Lock()
+	b.rejectConnections = reject
+	b.mu.Unlock()
+}
+
+// ConnectTimes returns a copy of the times at which CONNECT packets arrived.
+func (b *Broker) ConnectTimes() []time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]time.Time(nil), b.connectTimes...)
+}
+
+// WithholdPubAcks makes the broker stop answering QoS 1 publishes. It is how a
+// test observes a message the broker took but has not acknowledged.
+func (b *Broker) WithholdPubAcks() {
+	b.mu.Lock()
+	b.WithholdPubAck = true
+	b.mu.Unlock()
+}
+
+// StopAnswering makes the broker go quiet after its sessions are established:
+// no PUBACK, no PINGRESP, no delivery. The sockets stay open, so the client's
+// read deadline is what ends the session.
+func (b *Broker) StopAnswering() {
+	b.mu.Lock()
+	b.Silence = true
+	b.mu.Unlock()
+}
+
+// AnswerWithPubAck makes the broker acknowledge QoS 1 publishes with the given
+// packet identifier instead of the one the publish carried. It stands in for an
+// acknowledgement belonging to a different message. A zero id turns the behaviour
+// off again.
+func (b *Broker) AnswerWithPubAck(id uint16) {
+	b.mu.Lock()
+	b.SpuriousPubAck = id
+	b.mu.Unlock()
+}
+
+// SendUnsuback pushes a packet this client never sends and has no use for. It is
+// how a test observes that an unknown packet is skipped rather than costing the
+// session.
+func (b *Broker) SendUnsuback() {
+	b.mu.Lock()
+	sessions := make([]*session, 0, len(b.sessions))
+	for current := range b.sessions {
+		sessions = append(sessions, current)
+	}
+	b.mu.Unlock()
+
+	for _, current := range sessions {
+		_ = current.write(&mqtt.Packet{Type: mqtt.PacketUNSUBACK, PacketID: 7})
+	}
 }
 
 // DropConnections closes every accepted connection, simulating a broker restart
@@ -215,6 +312,17 @@ func (b *Broker) negotiate(current *session) error {
 		return fmt.Errorf("mqtttest: expected CONNECT, got %s", packet.Type)
 	}
 	current.clientID = packet.ClientID
+	b.mu.Lock()
+	b.connectTimes = append(b.connectTimes, time.Now())
+	reject := b.rejectConnections
+	b.mu.Unlock()
+	if reject {
+		return current.write(&mqtt.Packet{Type: mqtt.PacketCONNACK, ReturnCode: mqtt.ConnackServerUnavailable})
+	}
+
+	if b.TakeOver {
+		b.discardExisting(current.clientID)
+	}
 
 	if b.Credentials != nil {
 		if packet.Username != b.Credentials.Username || string(packet.Password) != b.Credentials.Password {
@@ -224,8 +332,41 @@ func (b *Broker) negotiate(current *session) error {
 	return current.write(&mqtt.Packet{Type: mqtt.PacketCONNACK, ReturnCode: mqtt.ConnackAccepted})
 }
 
+// discardExisting closes any session already using the identifier, the way a
+// real broker treats a second connection from the same client.
+func (b *Broker) discardExisting(clientID string) {
+	b.mu.Lock()
+	victims := make([]*session, 0, len(b.sessions))
+	for current := range b.sessions {
+		if current.clientID == clientID {
+			victims = append(victims, current)
+		}
+	}
+	b.mu.Unlock()
+
+	for _, victim := range victims {
+		_ = victim.conn.Close()
+	}
+}
+
 // dispatch handles one packet from a connected client.
 func (b *Broker) dispatch(current *session, packet mqtt.Packet) error {
+	b.mu.Lock()
+	silent := b.Silence
+	withhold := b.WithholdPubAck
+	b.mu.Unlock()
+
+	if silent {
+		// The broker has gone quiet: the packet is consumed and nothing is
+		// answered. What the client does next is the subject of the test.
+		if packet.Type == mqtt.PacketPINGREQ {
+			b.mu.Lock()
+			b.pings++
+			b.mu.Unlock()
+		}
+		return nil
+	}
+
 	switch packet.Type {
 	case mqtt.PacketPUBLISH:
 		b.mu.Lock()
@@ -237,8 +378,15 @@ func (b *Broker) dispatch(current *session, packet mqtt.Packet) error {
 		})
 		b.mu.Unlock()
 
-		if packet.QoS() > 0 {
-			if err := current.write(&mqtt.Packet{Type: mqtt.PacketPUBACK, PacketID: packet.PacketID}); err != nil {
+		if packet.QoS() > 0 && !withhold {
+			id := packet.PacketID
+			b.mu.Lock()
+			spurious := b.SpuriousPubAck
+			b.mu.Unlock()
+			if spurious != 0 {
+				id = spurious
+			}
+			if err := current.write(&mqtt.Packet{Type: mqtt.PacketPUBACK, PacketID: id}); err != nil {
 				return err
 			}
 		}
@@ -258,6 +406,9 @@ func (b *Broker) dispatch(current *session, packet mqtt.Packet) error {
 		return current.write(&mqtt.Packet{Type: mqtt.PacketSUBACK, PacketID: packet.PacketID, GrantedQoS: granted})
 
 	case mqtt.PacketPINGREQ:
+		b.mu.Lock()
+		b.pings++
+		b.mu.Unlock()
 		return current.write(&mqtt.Packet{Type: mqtt.PacketPINGRESP})
 
 	case mqtt.PacketDISCONNECT:

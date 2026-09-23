@@ -56,6 +56,97 @@ internal object Rfc3339 {
         }
     }
 
+    /**
+     * Parses an RFC 3339 timestamp into epoch milliseconds. Returns null if invalid.
+     *
+     * Strictness rules — every violation returns null rather than throwing:
+     * - a timezone designator is mandatory (`Z`/`z`, or a `±HH:MM` offset with
+     *   hour 0..23 and minute 0..59); a bare local time is not an instant;
+     * - nothing may follow the timezone designator;
+     * - a fractional second, once introduced by `.`, must contain at least one digit;
+     * - the calendar date must exist: 2024-02-29 is a leap day, 2026-02-29 is not,
+     *   and month lengths are enforced, so 2026-02-31 and 2026-04-31 are rejected.
+     */
+    fun parseEpochMillis(iso: String): Long? {
+        return try {
+            parseStrict(iso)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseStrict(iso: String): Long? {
+        // Minimum shape: YYYY-MM-DDTHH:MM:SSZ
+        if (iso.length < 20) return null
+        val year = iso.substring(0, 4).toIntOrNull() ?: return null
+        if (iso[4] != '-') return null
+        val month = iso.substring(5, 7).toIntOrNull() ?: return null
+        if (iso[7] != '-') return null
+        val day = iso.substring(8, 10).toIntOrNull() ?: return null
+        if (iso[10] != 'T' && iso[10] != 't') return null
+        val hour = iso.substring(11, 13).toIntOrNull() ?: return null
+        if (iso[13] != ':') return null
+        val minute = iso.substring(14, 16).toIntOrNull() ?: return null
+        if (iso[16] != ':') return null
+        val second = iso.substring(17, 19).toIntOrNull() ?: return null
+
+        if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+            return null
+        }
+
+        // Round-trip through day counting so impossible dates (2026-02-29, 2026-04-31)
+        // fold into a neighbouring month and are rejected instead of silently shifted.
+        val days = daysFromCivil(year.toLong(), month.toLong(), day.toLong())
+        val roundTrip = civilFromDays(days)
+        if (roundTrip.year != year.toLong() ||
+            roundTrip.month != month.toLong() ||
+            roundTrip.day != day.toLong()
+        ) {
+            return null
+        }
+
+        var idx = 19
+        var fractionMillis = 0L
+        if (idx < iso.length && iso[idx] == '.') {
+            idx++
+            val start = idx
+            while (idx < iso.length && iso[idx].isDigit()) {
+                idx++
+            }
+            val fracStr = iso.substring(start, idx)
+            // A trailing '.' with no digits is not a fractional second and not a
+            // legal separator either — reject rather than read it as zero.
+            if (fracStr.isEmpty()) return null
+            fractionMillis = fracStr.padEnd(3, '0').take(3).toLongOrNull() ?: return null
+        }
+
+        // The timezone designator is part of the instant: without it there is no
+        // unambiguous point in time, so its absence is an invalid timestamp.
+        if (idx >= iso.length) return null
+        var offsetMinutes = 0
+        when (val tzChar = iso[idx]) {
+            'Z', 'z' -> idx += 1
+            '+', '-' -> {
+                val sign = if (tzChar == '+') 1 else -1
+                val tzPart = iso.substring(idx + 1)
+                // Exactly ±HH:MM — no seconds, no bare ±HH, no extra text.
+                if (tzPart.length != 5 || tzPart[2] != ':') return null
+                val tzH = tzPart.substring(0, 2).toIntOrNull() ?: return null
+                val tzM = tzPart.substring(3, 5).toIntOrNull() ?: return null
+                if (tzH !in 0..23 || tzM !in 0..59) return null
+                offsetMinutes = sign * (tzH * 60 + tzM)
+                idx += 6
+            }
+            else -> return null
+        }
+        // Anything after the timezone designator means the value is not exactly
+        // one RFC 3339 timestamp (e.g. two concatenated values).
+        if (idx != iso.length) return null
+
+        val timeMillis = hour * 3600_000L + minute * 60_000L + second * 1000L + fractionMillis
+        return days * MILLIS_PER_DAY + timeMillis - offsetMinutes * 60_000L
+    }
+
     private data class CivilDate(val year: Long, val month: Long, val day: Long)
 
     /**
@@ -83,6 +174,19 @@ internal object Rfc3339 {
             month = month,
             day = day,
         )
+    }
+
+    /**
+     * Howard Hinnant's `days_from_civil`: converts (year, month, day) into days since 1970-01-01.
+     */
+    private fun daysFromCivil(year: Long, month: Long, day: Long): Long {
+        val y = if (month <= 2L) year - 1L else year
+        val era = floorDiv(y, 400L)
+        val yoe = y - era * 400L
+        val m = if (month > 2L) month - 3L else month + 9L
+        val doy = (153L * m + 2L) / 5L + day - 1L
+        val doe = yoe * 365L + yoe / 4L - yoe / 100L + doy
+        return era * 146_097L + doe - 719_468L
     }
 
     /** Floors toward negative infinity, which is what splitting a timeline needs. */

@@ -1,7 +1,8 @@
 <!--
   历史趋势。
-  窗口由共享层的 from/to 边界决定，服务端返回最近一页并已反转为升序；
-  本页不做二次过滤、不做浮点格式化（统计值已是整数字符串）。
+  统计与文案来自共享展示层（utils/presentation.js），读数取整、不做小数展示；
+  曲线由 utils/trend-chart.js 在 Canvas 2D 上绘制（各指标独立量程、气体缺失分段）。
+  网络失败与「没有样本」是两个不同状态，不能互相伪装。
 -->
 <view class="page">
   <!-- 页头 -->
@@ -24,11 +25,10 @@
   </view>
 
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
-  <view class="hint" wx:if="{{error}}">{{error}}</view>
-  <view class="hint" wx:if="{{trends && !trends.hasData}}">所选区间内没有遥测样本</view>
+  <view class="hint" wx:if="{{!loading && trends && !trends.hasData}}">所选区间内没有遥测样本</view>
 
+  <!-- ============ 统计摘要（横向滑动） ============ -->
   <block wx:if="{{trends && trends.hasData}}">
-    <!-- ============ 统计摘要（横向滑动） ============ -->
     <view class="section-head">
       <view class="section-title">统计摘要</view>
       <view class="section-tip">共 {{trends.sampleCount}} 条样本</view>
@@ -101,32 +101,49 @@
     <view class="hint" wx:if="{{trends.gasSampleCount < trends.sampleCount}}">
       {{trends.sampleCount - trends.gasSampleCount}} 条样本没有已校准气体读数，未计入气体统计
     </view>
-
-    <!-- ============ 曲线区 ============ -->
-    <view class="section-head">
-      <view class="section-title">曲线视图</view>
-      <view class="section-tip">{{trends.curveStatusText}}</view>
-    </view>
-
-    <view class="card chart-card">
-      <view class="chart-legend">
-        <view class="legend-item" wx:for="{{trends.curveLegend}}" wx:key="label">
-          <view class="legend-dot dot-{{item.tone}}"></view><text>{{item.label}}</text>
-        </view>
-      </view>
-      <view class="chart-body">
-        <view class="grid-line" wx:for="{{[0,1,2,3]}}" wx:key="*this"></view>
-        <view class="chart-mask">
-          <view class="chart-mask-title">{{trends.curveMaskTitle}}</view>
-          <view class="chart-mask-sub">{{trends.curveMaskSub}}</view>
-        </view>
-      </view>
-      <view class="chart-xaxis">
-        <text>{{trends.curveAxisStart}}</text>
-        <text>{{trends.curveAxisEnd}}</text>
-      </view>
-    </view>
-
     <view class="hint">{{trends.footerHint}}</view>
   </block>
+
+  <!-- ============ 曲线区 ============ -->
+  <view class="section-head">
+    <view class="section-title">曲线视图</view>
+    <view class="section-tip">各指标按独立量程展示</view>
+  </view>
+
+  <view class="card chart-card">
+    <view class="chart-legend">
+      <view class="legend-item">
+        <view class="legend-dot dot-danger"></view>
+        <text>温度{{chartRanges.temp !== '--' ? ' (' + chartRanges.temp + ')' : ''}}</text>
+      </view>
+      <view class="legend-item">
+        <view class="legend-dot dot-info"></view>
+        <text>湿度{{chartRanges.hum !== '--' ? ' (' + chartRanges.hum + ')' : ''}}</text>
+      </view>
+      <view class="legend-item">
+        <view class="legend-dot dot-mint"></view>
+        <text>气体{{chartRanges.gas !== '--' ? ' (' + chartRanges.gas + ')' : ''}}</text>
+      </view>
+    </view>
+
+    <view class="chart-body">
+      <canvas type="2d" id="trendsCanvas" class="trends-canvas"></canvas>
+      <!-- 空数据与网络失败是两个不同的状态：不能把加载失败写成「暂无历史数据」，
+           也不能在失败时继续把上一窗口的旧曲线当成当前窗口。 -->
+      <view class="chart-empty" wx:if="{{error}}">
+        <text>{{error}}</text>
+        <text class="chart-retry" bindtap="onRetryTap">点此重试</text>
+      </view>
+      <view class="chart-empty" wx:elif="{{!hasChartData}}">
+        <text>暂无历史数据</text>
+      </view>
+    </view>
+
+    <view class="chart-xaxis">
+      <text>{{axisTimes.start}}</text>
+      <text>{{axisTimes.end}}</text>
+    </view>
+  </view>
+
+  <view class="hint">三条曲线按各自量程展示，用于观察变化趋势，不用于直接比较曲线高度；数据受最近一页最多 200 条限制</view>
 </view>

@@ -104,11 +104,15 @@ async function loadDashboard() {
  * 查询用绝对 from/to 边界而不是只给 limit：只给 limit 时后端返回的是区间内
  * 最旧的一页，24 小时窗口会变成"只描述开头几分钟"，却被当成一整天的走势。
  * 因此按 order=desc 取最近一页，再在本地反转为升序，保证下游统计口径一致。
+ *
+ * 折线图需要原始数值（不是格式化文本），因此样本与视图分开暴露：
+ * 同一批样本喂给 presentation.trends() 得到统计视图，同时喂给
+ * utils/trend-chart.js 绘制曲线，两者永远基于同一份数据。
  * @param {string} [windowKey] LAST_HOUR | LAST_SIX_HOURS | LAST_DAY
  * @param {number} [limit] 页大小，1..1000
- * @returns {Promise<Object>} TrendsView
+ * @returns {Promise<Object[]>} 升序的原始遥测样本
  */
-async function loadTrends(windowKey, limit) {
+async function loadTrendSamples(windowKey, limit) {
   const safeLimit = Math.min(Math.max(Number(limit) || DEFAULT_TREND_LIMIT, 1), MAX_SAMPLE_LIMIT)
   const to = Date.now()
   const from = to - hoursToMillis(presentation.windowHours(windowKey || 'LAST_HOUR'))
@@ -119,7 +123,18 @@ async function loadTrends(windowKey, limit) {
     order: 'desc',
   }
   const page = await get('/api/v1/devices/' + deviceId + '/telemetry', { query })
-  return presentation.trends((page.items || []).slice().reverse(), windowKey || 'LAST_HOUR')
+  return (page.items || []).slice().reverse()
+}
+
+/**
+ * 加载趋势视图（统计 + 图例 + 文案）。
+ * @param {string} [windowKey] 窗口 key
+ * @param {number} [limit] 页大小
+ * @returns {Promise<Object>} TrendsView
+ */
+async function loadTrends(windowKey, limit) {
+  const points = await loadTrendSamples(windowKey, limit)
+  return presentation.trends(points, windowKey || 'LAST_HOUR')
 }
 
 /**
@@ -210,6 +225,7 @@ module.exports = {
   setDeviceId,
   currentDeviceId,
   loadDashboard,
+  loadTrendSamples,
   loadTrends,
   loadAlerts,
   loadSettings,

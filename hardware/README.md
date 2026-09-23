@@ -36,7 +36,7 @@
 阈值全部集中在 `STM32_Project1/User/app_config.h`，默认为 30 ℃、80 %RH、20 ppm、3 ℃ 突增、150 ADC 突增。
 `hardware/core/env_monitor.h` 直接从该头文件取默认值，因此**只需要改一个地方**，设备行为与后台上报的阈值版本 1 会同步变化。
 
-**蜂鸣器语义**：只有 `gas_high` 或 `rapid_gas_rise` 会驱动 PA8，以 200 ms 发声 + 800 ms 停止的周期间歇告警；温度、湿度和传感器故障只保留 LED/OLED/遥测告警。远程静音只抑制蜂鸣器，不改变其他告警状态。
+**蜂鸣器语义**：只有 `gas_high` 或 `rapid_gas_rise` 会驱动 PA8，以 200 ms 发声 + 800 ms 停止的**名义**周期间歇告警（实现是「每 10 节拍响 2 节拍」的比例，实际时长随主循环迭代耗时伸缩，见已知限制第 14 项）；温度、湿度和传感器故障只保留 LED/OLED/遥测告警。远程静音只抑制蜂鸣器，不改变其他告警状态。
 
 **滤波**：`gasAdcRaw` 与 `gasAdcFiltered` 同时保留。滤波使用固定 10 点环形窗口的算术平均，窗口未填满时按已采样本数取平均，因此上电后第一秒即可用，而不是等窗口填满才输出。气体浓度估算值由**滤波后**的 ADC 换算，保证同一帧里的 `gasAdcFiltered` 与 `gasPpm` 描述同一个采样。
 
@@ -190,6 +190,8 @@ cd <项目目录>
 如果项目由压缩包解压得到，直接在终端中 `cd` 到本 README 所在的根目录即可。
 
 ### 3. 编译固件
+
+（以下命令在 `hardware/` 目录执行。）
 
 Debug 构建：
 
@@ -351,7 +353,10 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 │   ├── telemetry_json.[ch]       # 遥测 Payload 构造
 │   ├── command_json.[ch]         # 控制命令解析、requestId 去重、ACK 构造
 │   ├── mqtt_packet.[ch]          # MQTT 3.1.1 报文编解码
-│   └── threshold_store.[ch]      # 阈值记录格式、CRC32、双槽读写
+│   ├── control_link.[ch]         # 下行控制链路：校验、去重、执行与 ACK 构造
+│   ├── session_dispatch.[ch]     # MQTT 会话状态机、SUBACK 校验与多帧分发
+│   ├── threshold_store.[ch]      # 阈值记录格式、CRC32、双槽读写
+│   └── boot_id.[ch]              # 启动标识格式化
 ├── tests/                         # 主机单元测试（独立 CMake 工程）
 ├── scripts/host_coverage.sh       # 核心逻辑行覆盖率
 ├── STM32_Project1/               # 主程序、启动文件、外设库和链接脚本
@@ -361,14 +366,15 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 ├── OLED/                          # OLED 驱动
 ├── OLED_DATA/                     # ASCII/中文字模
 ├── LED/                           # LED/蜂鸣器辅助驱动
+├── HW/                            # 板级输入（PA0，编入固件）
 └── 字模提取PCtoLCD2002/          # Windows 字模提取工具及配置示例
 ```
 
 ## 本地逻辑与主机测试
 
-`hardware/core/` 下的八个模块不依赖 STM32、GPIO 或任何驱动，只做"数值/字节到决策"的转换。所有安全关键判断（阈值边界、突增判定、传感器故障、静音优先级、页面内容）都在这里，因此可以在主机上完整测试，不需要开发板在桌上。
+`hardware/core/` 下不依赖 STM32、GPIO 或任何驱动的模块只做"数值/字节到决策"的转换。所有安全关键判断（阈值边界、突增判定、传感器故障、静音优先级、蜂鸣器可闻原因与节奏、页面内容、下行命令的校验/去重/执行/回执）都在这里，因此可以在主机上完整测试，不需要开发板在桌上。
 
-主机测试是独立的 CMake 工程，使用主机编译器；固件仍由交叉编译器构建，两者共用同一份 `core/` 源码。
+主机测试是独立的 CMake 工程，使用主机编译器；固件仍由交叉编译器构建，两者共用同一份 `core/` 源码。下列命令在**仓库根目录**执行（路径带 `hardware/` 前缀；固件构建见 §3，需在 `hardware/` 目录执行）。
 
 ```sh
 cmake -S hardware/tests -B hardware/build/host-tests
@@ -386,7 +392,7 @@ cmake --build hardware/build/host-tests-coverage
 
 该脚本使用 clang 的 profile 格式与 `llvm-profdata`/`llvm-cov`：macOS 上 clang 写出的文件名是 `<name>.c.gcno`，而 `gcov` 查找 `<name>.gcno`，因此 `--coverage` + gcov 无法读取自己产生的数据。
 
-最新一次本机结果（macOS / Apple clang）：`core/` 全部八个模块合计 **90% 行覆盖、79% 分支覆盖**，670 项断言全部通过。逐模块见上表脚本输出。
+最新一次本机结果（macOS / Apple clang，2026-09-22）：1118 项断言全部通过；`core/` 聚合 **91% 行覆盖**。本轮新增/修改的部分：`core/control_link.c` 95.3% 行 / 100% 函数，`core/mqtt_packet.c` 91.6%（`MqttForEachPacket` 全分支），`core/env_monitor.c` 97.8%（`EnvMonitorBuzzerDrive` 全分支），`core/display_model.c` 100%。`core/command_json.c` 全文件 86.6%，其中本轮改动的区域 100%——其余未覆盖行是既有的解析错误路径。逐模块数字见脚本输出。
 
 **主机测试不能替代实机验证。** 它证明的是判断逻辑本身正确，不能证明 DHT11 时序、MQ135 预热与标定、OLED 刷新、ESP8266 连接或电气连接在现场可用。见下文「已知限制」。
 
@@ -396,26 +402,86 @@ cmake --build hardware/build/host-tests-coverage
 
 ## MQTT 接入设计
 
-`docs/device-protocol.md` 冻结的 MQTT 契约由两个部分实现：
+`../docs/device-protocol.md` 冻结的 MQTT 契约由两个部分实现：
 
 - **报文编解码在 MCU 上完成**（`core/mqtt_packet.c`）。CONNECT、SUBSCRIBE、PUBLISH（QoS 0/1）、PUBACK、PINGREQ 由设备发出；CONNACK、SUBACK、PUBLISH、PINGRESP 由设备接收。超出该子集的（retain、will、QoS 2、MQTT 5）在发送端被拒绝，在接收端被拒绝并计数，而不是半处理。
 - **遥测与控制命令的 Payload** 分别由 `core/telemetry_json.c` 与 `core/command_json.c` 构造和解析。
 
 **为什么在 MCU 上实现而不是用 AT 的 MQTT 指令集**：ESP8266 不同 AT 固件版本的 MQTT 指令集不一致，而在这里无法确认目标模组的版本；透明 TCP 透传（`AT+CIPSTART`/`AT+CIPSEND`）是现有驱动已经在用的能力，与固件版本无关。实施方案 §4.5 把这条路列为备选，而它是两条路里唯一可以在拿到模组之前验证的——主机测试覆盖了帧格式、QoS 1 报文标识符、以及每种拒绝路径，其中 CONNECT 用逐字节的期望向量核对，因为一个只和自己一致的编解码器仍然可能发出 Broker 不接受的东西。
 
-**实机状态（2026-09-21）**：ESP8266 驱动已按长度交付二进制 `+IPD` 数据，发送及接收缓冲可容纳 640 字节 MQTT 帧，主循环已完成 CONNECT、SUBSCRIBE、QoS 1 PUBLISH 与 PING。已验证 `MCU001 → EMQX → Go Backend → postgres-dev`。下行命令的解析、Flash 写入与 ACK 尚未接入主循环。
+**实机状态（2026-09-22）**：ESP8266 驱动已按长度交付二进制 `+IPD` 数据，发送及接收缓冲可容纳 640 字节 MQTT 帧，主循环已完成 CONNECT、SUBSCRIBE、QoS 1 PUBLISH 与 PING。`MCU001 → EMQX → Go Backend → postgres-dev` 遥测链路已验证。下行命令路径（PUBLISH 解析 → 校验 → 去重 → 执行 → `device/command-ack` QoS 1 回执，以及 `set_thresholds` 的 Flash 写入与读回校验）已实现、通过主机测试并完成**实机闭环验收**——远程静音、解除静音、阈值下发/掉电保持与断网自治的逐项证据见「实机闭环验收记录」。
+
+### 下行控制路径（`core/control_link.c`）
+
+发送路径按固定的顺序处理一个接收缓冲：
+
+1. `MqttForEachPacket` 逐帧扫描（一个 TCP 段可能含多帧），codec 拒绝的帧跳过并计数，尾部残帧计为 partial。
+2. 主题按**字节长度**精确比对 `device/control`——PUBLISH 的主题在线上是带长度的字段、不以 NUL 结尾，因此不能假定有终止符。
+3. QoS 1 的 PUBLISH **一律**回 PUBACK（传输层确认，与 payload 内容无关）；command ACK 是另一种确认，不能互相替代。
+4. payload 交给 `CommandJsonParse`；校验 schemaVersion、deviceId、类型与数值范围。
+5. 按 §4.1 的顺序去重（`CommandDedup`）→ 有效窗口 → 阈值版本 → 执行。
+6. 能识别 requestId 的命令生成 ACK，以 QoS 1 发到 `device/command-ack`；无法识别 requestId 的 payload 不回 ACK（ACK 必须携带 requestId），但仍回 PUBACK。
+
+`set_mute` 只写 `EnvMonitorSetMuted`：不清除 `localAlarm`，不关闭 LED、OLED 或遥测。`set_thresholds` 先经 `ThresholdStoreSave` 写入并读回校验，成功后才 `EnvMonitorSetThresholds` 生效；任一步失败回 `failed` 与对应 `errorCode`，旧配置继续生效。
+
+接收缓冲的已知限制（多帧 / 截断 / 覆盖 / 分片）以及 OLED 上的丢帧计数见 `../docs/device-protocol.md` §4.5.1。
 
 | 迁移前状态 | 已落地改造 |
 | --- | --- |
-| `ESP8266_SEND_BUFFER_SIZE` / `ESP8266_MESSAGE_BUFFER_SIZE` 均为 64 字节 | 一帧遥测 PUBLISH 约 430 字节，缓冲区必须扩到 ~640 字节 |
+| `ESP8266_SEND_BUFFER_SIZE` / `ESP8266_MESSAGE_BUFFER_SIZE` 均为 64 字节 | 一帧遥测 PUBLISH 约 430 字节：接收缓冲扩到 640 字节；发送改为 `ESP8266_SendBytes` 流式发送，MQTT 帧先在 640 字节的 `mqttTx` 中组装 |
 | `+IPD` 正文按 NUL 结尾的文本处理 | MQTT 帧内含 0x00 字节（如 16 位长度的低字节），需要按长度而不是按字符串交付 |
 | 主循环只调用 `ESP8266_Task` 维护 TCP 文本帧 | 需要一个由节拍驱动的会话状态机：CONNECT → SUBSCRIBE → 发布/心跳 |
+| 收到 PUBLISH 只判断类型后丢弃 | 需要一个下行命令路径：主题比对 → 解析 → 去重 → 执行 → ACK |
 
-上表三项已落地并通过实机遥测验收；表保留为迁移原因记录。尚不得声称远程静音或阈值下发已通过。
+上表四项已落地：前三项已通过实机遥测验收，第四项（下行命令路径）已通过实机闭环验收，见下文「实机闭环验收记录」。
+
+## 实机闭环验收记录（2026-09-22）
+
+板卡 STM32F103C8T6，ST-LINK V2（J37S7）+ OpenOCD 0.12.0，Arm GNU Toolchain 15.3.1，release 构建烧录（`program … verify reset`，Verify OK）。设备 `MCU001` 连手机热点 → 本机 EMQX 5.8（`:1883`）→ Go Backend（`:8080`）→ `postgres-dev`。
+
+### 远程静音闭环：通过
+
+| 步骤 | 证据 |
+| --- | --- |
+| `POST /commands/mute {"muted":true}`（带 Idempotency-Key） | 202 `pending`，requestId `01M33E9JS6E0GPMSJG5C1WYJR3` |
+| 设备执行并回 `device/command-ack` | Backend 日志 `command acknowledgement received … status:"applied"`；命令资源 `state:"applied"`，accepted→completed 约 1 秒 |
+| 下一次遥测 | `buzzerMuted:true`，同时 `localAlarm:true`、`alarmCauses:["temperature_high","gas_high"]`——静音没有清除报警 |
+| OLED | 人工确认可见 MUTED 标识，且报警原因仍在 |
+| 解除静音 | `{"muted":false}` → `state:"applied"`，遥测 `buzzerMuted:false` |
+| 蜂鸣器人工听感 | 能听到，解静音后恢复间歇鸣叫；**音量偏弱**（硬件侧） |
+
+### 接收丢帧计数：无丢帧
+
+SWD 直读 `s_discardedFrames` / `s_truncatedFrames` 均为 0；本轮所有命令均在首次投递即被执行，未出现需要 QoS 1 重投递的帧。
+
+### 阈值下发与掉电保持：通过
+
+| 步骤 | 证据 |
+| --- | --- |
+| `PUT /thresholds {35,85,25}` | `state:"applied"`，`desiredVersion:3`、`confirmedVersion:3`、`confirmationState:"confirmed"` |
+| 复位后重新上线 | 遥测 `alarmCauses` 由 `["temperature_high","gas_high"]` 变为 `["gas_high"]`，与 35 ℃ 上限一致 |
+| SWD 直读 Flash | `0x0800F800` = `5248544c 00000301 19552300 00960300 92c872d6 …`：magic "LTHR"、schema 1、version 3、温度 35、湿度 85、气体 25，上升阈值保持编译期默认 3/150；`0x0800FC00` 全 `0xFF`（另一槽未动）。记录在复位后仍在，说明来自 Flash 而非 RAM |
+| 恢复正式阈值 | `PUT /thresholds {30,80,20}` → `state:"applied"`、version 5 confirmed |
+
+### 断网自治：通过（机器验证）
+
+停止 EMQX 容器后（设备失去 Broker），SWD 直读 `GPIOA_ODR` 的 PA4 = 1（LED 报警常亮），`TIM1_CCER` 的 CC1E 在被采样的 20 次中始终为 1（蜂鸣器输出仍在驱动）。即 Broker 不可达时本地采样、判断与声光报警继续工作。重启 EMQX 后设备在无复位的情况下自行重连并恢复上报（`bootId` 未变，`sequence` 续增）。
+
+### 蜂鸣器输出链路：已驱动，节奏为比例而非固定毫秒
+
+SWD 直读确认：`TIM1_ARR=0x1f3`（499）、`TIM1_CCR1=0xfa`（250）、`TIM1_CR1=0x81`（CEN）、`TIM1_BDTR=0x8000`（MOE）、`GPIOA_CRH` 的 PA8 字段为 AF 推挽 50 MHz —— 与 `LED/led.c` 按 8 MHz HSI 推导出的 2 kHz、50% 占空比完全一致。CC1E 在气体报警且未静音时被反复置位/清除，即 `BEEP_On`/`BEEP_Off` 确实在执行。
+
+**已知偏差**：节奏由 `(tick % 10) < 2` 决定，即「每 10 个主循环节拍响 2 个」，是一个**比例**而不是有界的毫秒时长。主循环某次迭代变慢时（例如 ESP8266 AT 命令等待超时、Broker 不可达时反复重试），那一次「响」会持续到该迭代结束，实测出现过 4 s 以上的连续鸣响；用户也听到过长响与短响并存。在标称 100 ms 节拍下这个比例就是 200 ms 开 / 800 ms 关，但实际节拍明显长于 100 ms。若验收要求严格的 200/800 ms 壁钟节奏，需要把节奏判据改成毫秒时基（SysTick），并重新做硬件验证——本轮未做该改动，属于已知偏差。
+
+### 本轮未验证 / 受阻
+
+- **Backend 侧 MQTT 会话每 30 秒断开问题（已由主线修复）**：此前 Backend 因 session 恢复后 backoff 未重置引发的周期性断开（`connection lost: EOF`），已在 PR #21 中合入 main 修复，不再是当前阻塞项。
+- 真实断电（拔电）后的阈值保持未做：本轮用复位验证（记录仍在 Flash）。两槽记录设计本身就是为掉电窗口准备的，但真正的拔电验收仍待做。
+- OLED 的 MUTED 显示由人工确认，不是自动化断言；其渲染逻辑由 `core/display_model.c` 的主机测试覆盖。
 
 ## 阈值掉电保存
 
-阈值保存在保留的两页 Flash 中，链接脚本已把代码区缩短到 62 KiB 以让出这两页（`Linker/STM32F103C8Tx_FLASH.ld`），因此固件长到这两页里时链接会直接失败。
+阈值保存在保留的两页 Flash 中，链接脚本已把代码区缩短到 62 KiB 以让出这两页（`STM32_Project1/Linker/STM32F103C8Tx_FLASH.ld`），因此固件长到这两页里时链接会直接失败。
 
 记录格式固定 20 字节，字段偏移与字节序固定，不使用结构体内存映像，因此不同编译器与对齐设置下含义不变：
 
@@ -445,24 +511,26 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 
 **版本严格递增**：不比当前版本新的记录会被拒绝写入，否则一条重放的旧命令就能悄悄撤销较新的配置。
 
-**尚未接线**：写入路径由控制命令处理驱动，而命令链路尚未接到射频上，因此当前烧录的固件**永远报告"没有已保存配置"并使用编译期默认阈值**。读取路径已接好（上电时调用），所以一旦命令链路着陆，先前保存的值会立即生效。
+**接线状态（2026-09-22 更新）**：写入路径由控制命令处理驱动，命令链路已接入主循环并完成实机闭环验收——阈值下发、复位后读取生效均已逐项验证（见「实机闭环验收记录」与已知限制第 11 项）。上电时 `ThresholdStoreLoad` 读取最近有效记录；两槽均不可用时才回退到编译期默认阈值。
 
 ## 已知限制与待验证项
 
 以下记录区分已经完成的首轮实机验收与仍需后续验证的边界：
 
 1. **DHT11 已实机读数通过（2026-09-21）。** 此前稳定返回时序错误、温湿度恒为 0，根因是软件位读取太慢而非硬件，详见上文「DHT11 故障状态码 / 现场实测记录」。修复后实测板连续读数 `Temp: 30C` / `Humi: 040%`，遥测 JSON 中 `sensorFault=false`。ST-LINK 烧录/校验、OLED、MQ135 ADC、ESP8266 入网与 MQTT 上报同样已通过。
-2. **蜂鸣器已实机验收通过。** 根因是固件选错端口：先前的 SWD 测量只证明 PB13/TIM1_CH1N 在输出，不能证明它与蜂鸣器 IO 物理相连。当前蜂鸣器信号端在 GPIOA，固件改用不与 ADC、DHT11、USART1 和 SWD 冲突的 PA8/TIM1_CH1 主输出（`CC1E`）。release 固件烧录后已确认正常发声；在 `gas_high` 实际告警期间连续采样 TIM1 CCER，也确认输出按 200 ms 开、800 ms 关切换而非常响。PA13 保留给 SWDIO。
-3. **烧录前必须确认固件来自当前源码。** 移动源码目录后必须用 `cmake --preset <debug|release> --fresh` 重新配置，不能把历史构建缓存当成可移植产物。判断方法：`strings build/debug/STM32_Project1.bin | grep device/telemetry` 有输出才说明包含 MQTT 遥测路径。提交版默认关闭上电自检，不应把“上电不响”误判为烧录失败。
-4. **系统时钟是 HSI 8 MHz，未启用 PLL。** `Start/system_stm32f10x.c` 中所有 `SYSCLK_FREQ_*` 宏都被注释掉。当前 APB2 不分频，因此 `SystemCoreClock`、PCLK2 与 TIM1 时钟均为 8 MHz；只有 APB2 被分频时，高级定时器时钟才是 PCLK2 的两倍。蜂鸣器频率已改为按实际总线分频推导（`LED/led.c`），不再假设 72 MHz。
+2. **蜂鸣器已实机验收通过。** 根因是固件选错端口：先前的 SWD 测量只证明 PB13/TIM1_CH1N 在输出，不能证明它与蜂鸣器 IO 物理相连。当前蜂鸣器信号端在 GPIOA，固件改用不与 ADC、DHT11、USART1 和 SWD 冲突的 PA8/TIM1_CH1 主输出（`CC1E`）。release 固件烧录后已确认发声，在 `gas_high` 实际告警期间连续采样 TIM1 CCER 也确认输出随报警切换。音量偏弱、以及节奏是比例而非固定毫秒，见「实机闭环验收记录」与下文第 13、14 项。PA13 保留给 SWDIO。
+3. **烧录前必须确认固件来自当前源码。** 移动源码目录后必须用 `cmake --preset <debug|release> --fresh` 重新配置（`--fresh` 需 CMake ≥ 3.24；更低版本删除对应 `build/` 目录后重新配置即可），不能把历史构建缓存当成可移植产物。判断方法：`strings build/debug/STM32_Project1.bin | grep device/telemetry` 有输出才说明包含 MQTT 遥测路径。提交版默认关闭上电自检，不应把“上电不响”误判为烧录失败。
+4. **系统时钟是 HSI 8 MHz，未启用 PLL。** `STM32_Project1/Start/system_stm32f10x.c` 中本工程（`STM32F10X_MD`）分支的全部 `SYSCLK_FREQ_*` 宏都被注释掉。当前 APB2 不分频，因此 `SystemCoreClock`、PCLK2 与 TIM1 时钟均为 8 MHz；只有 APB2 被分频时，高级定时器时钟才是 PCLK2 的两倍。蜂鸣器频率已改为按实际总线分频推导（`LED/led.c`），不再假设 72 MHz。
 5. **气体估算未标定。** `MQ135_EstimatePpm` 使用 `RL=1 kΩ`、`Ro=10 kΩ` 与简化拟合曲线的示例常数，`116.30 / ratio²` 只是近似。在完成预热、负载电阻确认与标准气体标定之前，`gasPpm` 只能作为相对指标，上位机应以 `gasCalibrated=false` 与 ADC 分级呈现。阈值 20 ppm 也只是一个相对限值。
-6. **ESP8266 重连仍是阻塞的。** `ESP8266_Init` 与 `ESP8266_WaitFor` 最长可等待数秒，期间主循环不会前进，本地采样会被推迟最多数秒。报警输出（LED/蜂鸣器）是 GPIO 保持状态，因此已有报警不会中断；但**新的**报警最多会被推迟这几秒。把网络状态机改为由节拍驱动的非阻塞实现属于 SHIXUN-8 的范围，在此之前不得声称「断网自治」已完全达成。
+6. **ESP8266 重连仍是阻塞的。** `ESP8266_Init` 与 `ESP8266_WaitFor` 最长可等待数秒，期间主循环不会前进，本地采样会被推迟最多数秒。报警输出（LED/蜂鸣器）是 GPIO 保持状态，因此已有报警不会中断；但**新的**报警最多会被推迟这几秒。把网络状态机改为由节拍驱动的非阻塞实现属于 SHIXUN-8 的范围。停 EMQX 场景的断网自治已通过机器验证（见「实机闭环验收记录」），但阻塞期间**新**告警的延迟未量化、拔掉 AP 的场景未实测；这些补全前结论只能表述为「断网自治（停 Broker 场景）已验证」，不得扩大。
 7. **Wi-Fi 与服务器配置**依赖本机 `Esp8266/esp8266_config.local.h`。缺少该文件时固件使用不可联网的占位值，只保证可编译。
 8. **阈值和突增参数未现场整定。** 默认值来自实施方案文档，尚未在真实环境中统计误报与漏报。
 9. **页面文字为英文。** 现有字模资源包含中文字模，但轮播页面使用 16 字符宽的 ASCII 行；改为中文需要按宽度重新排版并核验字模覆盖范围。
-9. **MQTT 上行已通，下行尚未完成。** 驱动已支持 640 字节二进制帧，真实遥测已经由 EMQX 进入 Backend 并落库。但控制 PUBLISH 的命令解析、动作和 ACK 还未串入主循环。
-10. **阈值写入路径尚未接线。** Flash 双槽读写、CRC 与断电恢复已实现并有主机测试（含写入截断、擦除失败、单字节翻转），但写入由控制命令驱动，而命令链路未通。因此当前固件只会读取、不会写入，实际生效的始终是编译期默认阈值。
-11. **阈值小数被舍入到 1 度。** DHT11 只有 1 °C 分辨率，后台允许下发 30.5 这类小数；设备四舍五入到整度执行（30.5 → 31）。这是分辨率限制而非实现选择，已记录在 `docs/device-protocol.md`。
+10. **MQTT 上行与下行均已打通。** 驱动支持 640 字节二进制帧，遥测已经由 EMQX 进入 Backend 并落库；`device/control` 的 PUBLISH 已接入命令解析、动作与 `device/command-ack`，并完成实机闭环验收（见「实机闭环验收记录」）。仍需注意：Broker 重启后 Backend 侧的控制命令发布存在独立缺陷（Backend 模块，另立分支）。
+11. **阈值写入路径已接线。** Flash 双槽读写、CRC 与断电恢复有主机测试（含写入截断、擦除失败、单字节翻转）；写入由控制命令驱动，并已在实机确认记录落到 `0x0800F800` 且复位后仍生效。真正的拔电验收仍待补做。
+12. **阈值小数被舍入到 1 度。** DHT11 只有 1 °C 分辨率，后台允许下发 30.5 这类小数；设备四舍五入到整度执行（30.5 → 31）。这是分辨率限制而非实现选择，已记录在 `../docs/device-protocol.md`。
+13. **蜂鸣器音量偏弱。** 输出链路已被 SWD 证实正确（PA8/TIM1_CH1，2 kHz、50% 占空比、MOE 使能、CC1E 随报警切换），人工听感也能区分长响与短响，但音量偏小。属于硬件侧（蜂鸣器型号、驱动电流或串阻），未在本轮改动。
+14. **发声节奏是有界性的比例而非固定毫秒。** 见「蜂鸣器输出链路」一节：`(tick % 10) < 2` 保证的是 2:8 的占空比，单次鸣响时长取决于当次主循环迭代耗时，实测可被拉长到数秒。严格 200/800 ms 壁钟节奏需要毫秒时基，属后续改动。
 
 ## Reuse Assessment
 
@@ -470,11 +538,11 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 
 ### Inventory
 
-- 自研/项目源码：`STM32_Project1/main.c` 与 `User/`（配置、Flash 端口、中断），`core/`（八个纯逻辑模块）、`tests/`（主机单元测试），以及 ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、按键/输入和 delay 模块。
+- 自研/项目源码：`STM32_Project1/main.c` 与 `User/`（配置、Flash 端口、中断），`core/`（十一个纯逻辑模块）、`tests/`（主机单元测试），以及 ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、HW/按键输入和 delay 模块。
 - 平台依赖：STM32F10x Standard Peripheral Library、CMSIS/启动文件和 STM32F103C8 链接脚本。
 - 构建配置：CMake 工程、Debug/Release presets、Arm GNU Toolchain 文件，以及一个未完整登记源码的旧 Keil 工程。
 - 文档与资源：本 README、`BUILDING.md`、OLED 字模数据，以及随项目保存的 Windows 字模提取工具和配置。
-- 生成物：`build/`、`STM32_Project1/Objects/` 和 `STM32_Project1/Listings/` 中存在历史编译缓存、ELF/HEX/BIN、目标文件和映射文件；它们是生成物，不应被视为可移植源码事实源。
+- 生成物：`build/`、`STM32_Project1/Objects/` 与 `STM32_Project1/Listings/` 中的编译缓存、ELF/HEX/BIN、目标文件和映射文件均为生成物（当前检出可能不含这些目录），不应被视为可移植源码事实源。
 
 ### Directly Reusable
 
@@ -482,7 +550,7 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 - DHT11 读取、超时与校验和处理。
 - OLED SSD1306 软件 I²C 驱动、显示缓存和字模资源。
 - LED 与蜂鸣器驱动，以及按节拍分频的主循环。原有「1 秒循环 + 三阈值比较」已由 `core/env_monitor` 取代：判定逻辑被抽出为纯函数，新增滤波、突增判断与传感器故障处理，并可在主机上测试。
-- USART1/ESP8266 AT 通信、TCP 连接、断线状态处理及 `+IPD` 下行文本解析，可作为后续联调基础。
+- USART1/ESP8266 AT 通信、TCP 连接与断线状态处理已沿用并扩展：`+IPD` 正文已改为按长度交付二进制数据以承载 MQTT 帧（文本解析是迁移前形态），上/下行链路均已通过实机验收。
 - 已有 HEX/BIN 可用于追溯历史结果，但重新烧录前应从当前源码重新构建。
 
 按当前可辨识的 8 个固件功能单元（主流程、平台/构建、DHT11、ADC/MQ135、OLED、LED/蜂鸣器、ESP8266/TCP、辅助输入）统计，6 个可直接沿用，2 个需要环境配置或实机校准后沿用，即约 75% 可直接复用、25% 可经少量修改复用；没有发现必须整体重写的单元。该比例是功能单元口径，不是代码行数口径，也不代表已经完成实机验收。
@@ -496,17 +564,18 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 
 ### Needs Follow-up
 
-- 继续验证 Broker 重启恢复和断网自治；DHT11、蜂鸣器、OLED、MQ135 与 MQTT 遥测落库已通过首轮实机验收。
-- 将 `device/control` PUBLISH 接入命令解析、静音/阈值动作、Flash 持久化与 `device/command-ack`。
-- 现有协议适合作为最小联调 baseline，但不建议未经验证直接冻结为最终协议：它缺少显式协议版本、字段名/单位声明、错误帧、鉴权和更严格的边界约束。后续若变化，需同时记录并协调 Hardware 与 Backend。
-- 补充可重复的烧录/实机验收记录；当前仓库只有构建和操作说明，没有自动化硬件测试。
+- `device/control` 的 PUBLISH 已接入命令解析、静音/阈值动作、Flash 持久化与 `device/command-ack`，并已完成实机闭环验收（见「实机闭环验收记录」）。
+- 仍待处理：蜂鸣器音量为硬件侧问题（能听到但偏弱）；发声节奏是「每 10 个节拍响 2 个」的**比例**，不是有界的毫秒时长，主循环某次迭代变慢时会拉长单次鸣响（见「蜂鸣器输出链路」一节与已知限制第 14 项）；Broker 重启后的控制命令发布在不修 Backend 的前提下不可靠（Backend 侧缺陷，见 Multica）。
+- DHT11、OLED、MQ135、LED/蜂鸣器输出链路与 MQTT 遥测落库已通过实机验收。
+- 设备协议已冻结为 v1.0.0（`../docs/device-protocol.md`）：含 `schemaVersion`、字段/单位表、错误码与变更流程。鉴权、TLS 与更严格的 Broker 边界仍属部署期工作（见 `../docs/integration-testing.md` §8）；协议后续变化必须走 §9 变更流程，同时记录并协调 Hardware 与 Backend。
+- 实机/烧录验收已有可重复记录（「实机闭环验收记录」，2026-09-22）；自动化硬件测试仍缺——主机测试不能替代 HIL，后续需补可重复的自动化烧录与验收脚本。
 
 ### Known Risks / Environment Dependencies
 
 - 网络部署值依赖本机 `Esp8266/esp8266_config.local.h`；缺少该文件时固件只能使用不可联网的安全占位值。
 - GPIO、外设和器件型号均与当前接线强绑定：DHT11 PA5、MQ135 PA1、LED PA4、蜂鸣器 PA8、OLED PB8/PB9、ESP8266 USART1 PA9/PA10。
 - 需要 CMake 3.20+、Arm GNU Toolchain、Make（presets）以及烧录时的 ST-LINK/STM32CubeProgrammer。
-- 当前 `build/debug` 和 `build/release` 内含从旧源码路径生成的 CMake 缓存；移动项目后直接复用会发生路径冲突。应重新配置构建目录，而不是把历史缓存当作可移植构建环境。
+- 移动项目后，`build/debug` / `build/release` 中若残留旧源码路径的 CMake 缓存，直接复用会发生路径冲突（当前检出可能不含这些目录）。应重新配置构建目录，而不是把历史缓存当作可移植构建环境。
 - `字模提取PCtoLCD2002/` 包含 Windows 可执行程序和运行库，仅适合受控的 Windows 环境；其来源、许可与安全性需由团队确认。
 - DHT11 时序、ESP AT 固件差异、MQ135 供电/分压与预热均依赖真实硬件环境。
 

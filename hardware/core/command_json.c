@@ -965,15 +965,20 @@ CommandResult CommandJsonParse(const char *json, uint32_t length, const char *de
         {
             return COMMAND_RESULT_REJECTED_RANGE;
         }
+
+        command->type = COMMAND_SET_THRESHOLDS;
+        command->threshold_version = fields.threshold_version;
         /* A version that does not move forward would let a replay undo a newer
-         * configuration, so it is refused rather than applied silently. */
-        if (current_threshold_version != 0U && fields.threshold_version <= current_threshold_version)
+         * configuration, so it is refused rather than applied silently. The
+         * comparison lives in its own function because the control path has to
+         * apply it later than this, after the deduplication check. */
+        if (current_threshold_version != 0U &&
+            CommandCheckThresholdVersion(command, current_threshold_version) !=
+                COMMAND_RESULT_APPLIED)
         {
             return COMMAND_RESULT_REJECTED_STALE_VERSION;
         }
 
-        command->type = COMMAND_SET_THRESHOLDS;
-        command->threshold_version = fields.threshold_version;
         command->thresholds.temperature_high_c = (uint8_t)(fields.temperature_high_tenths / 10U);
         command->thresholds.humidity_high_rh = (uint8_t)(fields.humidity_high_tenths / 10U);
         command->thresholds.gas_high_ppm = (uint16_t)(fields.gas_high_tenths / 10U);
@@ -1014,6 +1019,21 @@ bool CommandWithinWindow(const ControlCommand *command, uint32_t received_uptime
     /* Unsigned subtraction is the wrap-safe form; the counter wraps after about
      * 49.7 days, which the device cannot distinguish from a long uptime. */
     return (uint32_t)(now_ms - received_uptime_ms) <= command->window_ms;
+}
+
+CommandResult CommandCheckThresholdVersion(const ControlCommand *command,
+                                          uint32_t current_threshold_version)
+{
+    if (command == NULL || command->type != COMMAND_SET_THRESHOLDS)
+    {
+        return COMMAND_RESULT_APPLIED;
+    }
+    if (current_threshold_version != 0U &&
+        command->threshold_version <= current_threshold_version)
+    {
+        return COMMAND_RESULT_REJECTED_STALE_VERSION;
+    }
+    return COMMAND_RESULT_APPLIED;
 }
 
 const char *CommandAckStatus(CommandResult result)
@@ -1073,17 +1093,22 @@ uint32_t CommandAckJsonEncode(const CommandAckPayload *payload, char *buffer, ui
 {
     JsonWriter writer;
     const char *error_code;
-    bool thresholds_applied;
+    bool report_version;
 
     if (payload == NULL || buffer == NULL || capacity == 0U)
     {
         return 0U;
     }
-    /* Only a threshold command reports a version, and only when it took effect.
-     * Reporting the version for a command that did not change it would tell the
-     * backend the device adopted a configuration it refused. */
-    thresholds_applied = payload->result == COMMAND_RESULT_APPLIED &&
-                         payload->threshold_version != 0U;
+    /* docs/device-protocol.md §6: the version is reported for set_thresholds when
+     * the result is applied *or* duplicate, and is null otherwise. A duplicate of
+     * a threshold command must therefore still carry the version in force, because
+     * the backend reconciles its record from the acknowledgement and a null there
+     * would read as "this device has no threshold configuration". Every other
+     * result — including a mute acknowledgement — carries neither a version nor a
+     * claim to have changed one. */
+    report_version = (payload->result == COMMAND_RESULT_APPLIED ||
+                      payload->result == COMMAND_RESULT_DUPLICATE) &&
+                     payload->threshold_version != 0U;
 
     JsonWriterInit(&writer, buffer, capacity);
     JsonWriterRaw(&writer, "{");
@@ -1115,7 +1140,7 @@ uint32_t CommandAckJsonEncode(const CommandAckPayload *payload, char *buffer, ui
     JsonWriterString(&writer, CommandAckStatus(payload->result));
     JsonWriterRaw(&writer, ",");
     JsonWriterKey(&writer, "thresholdVersion");
-    if (thresholds_applied)
+    if (report_version)
     {
         JsonWriterUnsigned(&writer, payload->threshold_version);
     }

@@ -173,6 +173,49 @@ func TestDataBuildersCarryEveryField(t *testing.T) {
 	}
 }
 
+// TestAlertDataUsesContractEvidenceKeys checks the raw realtime payload rather
+// than decoding into a tagged Go struct. encoding/json matches field names
+// loosely on input, so only the raw key set catches a regression to PascalCase.
+func TestAlertDataUsesContractEvidenceKeys(t *testing.T) {
+	event := domain.AlertEvent{
+		ID: "01ALERT", DeviceID: "MCU001", State: domain.AlertFireWarning,
+		StartedAt: instant,
+		Evidence: domain.AlertEvidence{
+			GasAdcRise: 200, GasAdcRiseThreshold: 150,
+			TemperatureRateCPerMinute: 4, TemperatureRateThresholdCPerMinute: 3,
+			SampleCount: 8, WindowSeconds: 60,
+		},
+	}
+	raw, err := json.Marshal(events.AlertDataFrom(event))
+	if err != nil {
+		t.Fatalf("marshal alert data: %v", err)
+	}
+	var data struct {
+		Evidence map[string]json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("unmarshal alert data %s: %v", raw, err)
+	}
+	want := map[string]bool{
+		"gasAdcRise": true, "gasAdcRiseThreshold": true,
+		"temperatureRateCPerMinute": true, "temperatureRateThresholdCPerMinute": true,
+		"sampleCount": true, "windowSeconds": true,
+	}
+	if len(data.Evidence) != len(want) {
+		t.Fatalf("evidence keys = %v, want exactly the six contract keys", data.Evidence)
+	}
+	for key := range want {
+		if _, ok := data.Evidence[key]; !ok {
+			t.Errorf("evidence is missing contract key %q; got %v", key, data.Evidence)
+		}
+	}
+	for key := range data.Evidence {
+		if !want[key] {
+			t.Errorf("evidence contains non-contract key %q", key)
+		}
+	}
+}
+
 // TestConfirmedDataCarriesTheVersion verifies the thresholds.confirmed body, which
 // is how a client learns that the device adopted a new threshold version.
 func TestConfirmedDataCarriesTheVersion(t *testing.T) {

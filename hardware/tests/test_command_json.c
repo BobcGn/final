@@ -593,9 +593,19 @@ static void test_ack_payload(void)
     CHECK_TRUE(test_json_has_string(buffer, "status", "expired"));
     CHECK_TRUE(test_json_has_number(buffer, "errorCode", "null"));
 
-    TEST_CASE("a duplicate command reports the duplicate status");
+    TEST_CASE("a duplicate threshold command still reports the version in force");
     payload.result = COMMAND_RESULT_DUPLICATE;
     payload.threshold_version = 4U;
+    length = CommandAckJsonEncode(&payload, buffer, sizeof(buffer));
+    CHECK_TRUE(test_json_has_string(buffer, "status", "duplicate"));
+    /* docs/device-protocol.md §6 requires applied *and* duplicate to carry the
+     * device's current version, so a redelivered threshold command does not read
+     * to the backend as a device with no configuration. */
+    CHECK_TRUE(test_json_has_number(buffer, "thresholdVersion", "4"));
+
+    TEST_CASE("a duplicate mute command reports no threshold version");
+    payload.result = COMMAND_RESULT_DUPLICATE;
+    payload.threshold_version = 0U;
     length = CommandAckJsonEncode(&payload, buffer, sizeof(buffer));
     CHECK_TRUE(test_json_has_string(buffer, "status", "duplicate"));
     CHECK_TRUE(test_json_has_number(buffer, "thresholdVersion", "null"));

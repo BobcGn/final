@@ -115,4 +115,35 @@ uint32_t MqttPacketTotalLength(const uint8_t *data, uint32_t length);
  * count the failure without inspecting the bytes. */
 bool MqttDecode(const uint8_t *data, uint32_t length, MqttPacket *packet, const char **reason);
 
+/* What one pass over a receive buffer found.
+ *
+ * The receive path hands up one TCP segment at a time and the driver keeps a
+ * single buffer, so a segment can hold several frames and its tail can hold a
+ * fragment of the next one. Separating the counts is what lets a caller tell
+ * "the broker sent more than we read" from "the broker sent something we could
+ * not parse": both are losses, and neither is visible if they are folded into a
+ * single total. */
+typedef struct
+{
+    /* Frames the codec accepted. */
+    uint32_t decoded;
+    /* Frames whose framing was complete but whose contents the codec refused. */
+    uint32_t undecodable;
+    /* True when the buffer ends inside a frame. The driver cannot reassemble
+     * one, so the fragment is counted rather than retained. */
+    bool partial;
+} MqttScanResult;
+
+/* Called once per frame the codec accepted. `packet` points into `data` and is
+ * only valid for the duration of the call. */
+typedef void (*MqttVisitor)(void *context, const MqttPacket *packet);
+
+/* Decode every frame in `data` and hand each to `visit` in order.
+ *
+ * A frame the codec refuses is skipped rather than ending the scan, because its
+ * framing is intact: whatever follows it is still a frame the caller should see.
+ * The scan only stops early when the tail is not a complete frame. */
+MqttScanResult MqttForEachPacket(const uint8_t *data, uint32_t length, MqttVisitor visit,
+                                 void *context);
+
 #endif /* __MQTT_PACKET_H */

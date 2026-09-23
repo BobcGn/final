@@ -46,9 +46,9 @@
 .stat-meta-value { display: block; font-size: 30rpx; font-weight: 600; }
 .stat-extreme { display: block; margin-top: 18rpx; font-size: 20rpx; color: var(--text-3); }
 
-/* The curve frame. It is a placeholder: a legend, four grid lines, a masked note
-   and two axis labels, with no plotted geometry. See `curveReady` in the shared
-   model — this is the unfinished state, not a chart without data. */
+/* The curve frame: a legend, four grid lines and two axis labels around the
+   plotted geometry. `curveReady` in the shared model says whether there is
+   currently drawable history to put inside that frame. */
 .legend { display: flex; align-items: center; }
 .legend-item { display: flex; align-items: center; margin-right: 30rpx; font-size: 22rpx; color: var(--muted); }
 .legend-dot { width: 16rpx; height: 16rpx; border-radius: 50%; margin-right: 10rpx; }
@@ -59,20 +59,18 @@
 .chart-body {
   position: relative;
   height: 360rpx;
-  padding: 26rpx 0;
   margin-top: 20rpx;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
   border-radius: var(--r-md);
   background: rgba(0, 0, 0, .18);
   border: 1rpx solid rgba(255, 255, 255, .05);
   overflow: hidden;
 }
+.trend-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 .grid-line { height: 1rpx; margin: 0 22rpx; background: rgba(255, 255, 255, .05); }
-.chart-mask { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; }
-.chart-mask-title { font-size: 26rpx; color: var(--muted); }
-.chart-mask-sub { margin-top: 8rpx; font-size: 20rpx; color: var(--text-3); }
 .chart-xaxis { display: flex; justify-content: space-between; margin-top: 16rpx; font-size: 20rpx; color: var(--text-3); }
 
 /* Alerts: a state header, the evidence panel, then the recovery line. */

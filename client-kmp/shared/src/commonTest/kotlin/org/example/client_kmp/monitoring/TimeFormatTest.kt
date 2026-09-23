@@ -2,6 +2,7 @@ package org.example.client_kmp.monitoring
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 /**
  * Timestamp formatting and window arithmetic.
@@ -63,5 +64,98 @@ class TimeFormatTest {
         assertEquals(21_600_000L, Rfc3339.hoursToMillis(6))
         assertEquals(86_400_000L, Rfc3339.hoursToMillis(24))
         assertEquals(0L, Rfc3339.hoursToMillis(0))
+    }
+
+    @Test
+    fun parsesStandardRfc3339Timestamps() {
+        assertEquals(0L, Rfc3339.parseEpochMillis("1970-01-01T00:00:00Z"))
+        assertEquals(1_000L, Rfc3339.parseEpochMillis("1970-01-01T00:00:01Z"))
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-22T01:30:45Z"))
+        assertEquals(1_790_040_645_250L, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.250Z"))
+        // Offset +08:00
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-22T09:30:45+08:00"))
+        // Offset -05:00
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-21T20:30:45-05:00"))
+    }
+
+    @Test
+    fun invalidTimestampsReturnNull() {
+        assertEquals(null, Rfc3339.parseEpochMillis("not-a-time"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-13-01T00:00:00Z"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-01-32T00:00:00Z"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-01-01T25:00:00Z"))
+    }
+
+    // --- strict RFC 3339 parsing ----------------------------------------------------
+
+    @Test
+    fun aTimezoneDesignatorIsRequired() {
+        // A bare local time is not an instant: without Z or ±HH:MM there is no
+        // unambiguous point on the timeline.
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.250"))
+    }
+
+    @Test
+    fun trailingCharactersAfterTheTimezoneAreRejected() {
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45Zextra"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45Z "))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+08:00x"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45Z2026-09-22T01:30:45Z"))
+    }
+
+    @Test
+    fun timezoneHourAndMinuteRangesAreEnforced() {
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+24:00"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45-24:00"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+08:60"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+0800"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+8:00"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45+08:00:00"))
+    }
+
+    @Test
+    fun theCalendarDateMustActuallyExist() {
+        // 2024 is a leap year: 29 February exists.
+        assertNotNull(Rfc3339.parseEpochMillis("2024-02-29T00:00:00Z"))
+        // 2026 is not: 29 February does not exist.
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-02-29T00:00:00Z"))
+        // February never has 31 days.
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-02-31T00:00:00Z"))
+        // April has 30 days, not 31.
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-04-31T00:00:00Z"))
+    }
+
+    @Test
+    fun anEmptyFractionalSecondIsRejected() {
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.Z"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.+08:00"))
+    }
+
+    @Test
+    fun parsingNeverThrowsOnHostileInput() {
+        val hostile = listOf(
+            "",
+            " ",
+            "Z",
+            "2026",
+            "2026-09-22",
+            "XXXX-XX-XXTXX:XX:XXZ",
+            "2026-09-22T01:30:45.",
+            "2026-09-22T01:30:45.Z",
+        )
+        for (value in hostile) {
+            // Must return null or a Long — never throw.
+            Rfc3339.parseEpochMillis(value)
+        }
+    }
+
+    @Test
+    fun validUtcAndOffsetFormsStillParse() {
+        assertEquals(0L, Rfc3339.parseEpochMillis("1970-01-01T00:00:00Z"))
+        assertEquals(0L, Rfc3339.parseEpochMillis("1970-01-01T00:00:00z"))
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-22T09:30:45+08:00"))
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-21T20:30:45-05:00"))
+        assertEquals(1_790_040_645_250L, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.250Z"))
     }
 }

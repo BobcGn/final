@@ -47,7 +47,10 @@ CORE_MODULES="\
     $CORE_DIR/telemetry_json.c \
     $CORE_DIR/command_json.c \
     $CORE_DIR/mqtt_packet.c \
-    $CORE_DIR/threshold_store.c"
+    $CORE_DIR/control_link.c \
+    $CORE_DIR/session_dispatch.c \
+    $CORE_DIR/threshold_store.c \
+    $CORE_DIR/boot_id.c"
 
 if ! [ -f "$BUILD_DIR/host_tests" ]; then
     echo "error: '$BUILD_DIR/host_tests' not found; build the test target first" >&2
@@ -85,22 +88,25 @@ $COV show "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" $CORE_MODULES \
     2>/dev/null | grep '|  *0|' || echo "  (none)"
 
 echo
-# Compute the aggregate over the three core files from the report table.
+# Compute the aggregate over every core file from the report table. In llvm-cov's
+# TOTAL row column 8 is the total line count and column 9 is the missed line
+# count; treating column 8 as covered would inflate both the denominator and the
+# percentage reported by this gate.
 # shellcheck disable=SC2086
 SUMMARY=$(# shellcheck disable=SC2086
 $COV report "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" $CORE_MODULES \
     --format=text 2>/dev/null | tail -1)
 
-COVERED=$(echo "$SUMMARY" | awk '{print $8}')
+LINE_TOTAL=$(echo "$SUMMARY" | awk '{print $8}')
 MISSED=$(echo "$SUMMARY" | awk '{print $9}')
-TOTAL=$((COVERED + MISSED))
-if [ "$TOTAL" -eq 0 ]; then
+COVERED=$((LINE_TOTAL - MISSED))
+if [ "$LINE_TOTAL" -eq 0 ]; then
     echo "error: no core lines were instrumented" >&2
     exit 2
 fi
-PERCENT=$((COVERED * 100 / TOTAL))
+PERCENT=$((COVERED * 100 / LINE_TOTAL))
 
-echo "Aggregate core line coverage: $COVERED/$TOTAL = ${PERCENT}% (threshold ${THRESHOLD}%)"
+echo "Aggregate core line coverage: $COVERED/$LINE_TOTAL = ${PERCENT}% (threshold ${THRESHOLD}%)"
 
 if [ "$PERCENT" -lt "$THRESHOLD" ]; then
     echo "FAIL: core line coverage is below the required ${THRESHOLD}%" >&2

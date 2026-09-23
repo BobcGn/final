@@ -91,7 +91,7 @@ class MiniAppWxmlBindingTest {
         )
         assertHasAll(
             keysOfRow(json, "curveLegend"),
-            "label", "tone",
+            "label", "tone", "rangeText",
         )
         assertHasAll(
             keysOfRow(json, "windowOptions"),
@@ -101,6 +101,7 @@ class MiniAppWxmlBindingTest {
         assertHasAll(
             keysOfRow(json, "series"),
             "key", "receivedAt", "timeText", "temperatureText", "humidityText", "gasText", "localAlarm",
+            "timestampEpochMs", "temperatureC", "humidityRh", "gasPpm",
         )
     }
 

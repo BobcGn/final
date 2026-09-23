@@ -29,6 +29,6 @@ cmake --build --preset release
 
 本构建目标为 STM32F103C8（Cortex-M3、64 KiB Flash、20 KiB RAM）。
 
-`Start/core_cm3.c` 是 2009 年 CMSIS 为旧编译器提供的兼容实现，其中的
+`STM32_Project1/Start/core_cm3.c` 是 2009 年 CMSIS 为旧编译器提供的兼容实现，其中的
 独占访问内联汇编与新版 GCC 15 不兼容，因此 GCC 构建不编译该文件。
-当前工程使用的 Cortex-M3 核心定义仍由 `Start/core_cm3.h` 提供。
+当前工程使用的 Cortex-M3 核心定义仍由 `STM32_Project1/Start/core_cm3.h` 提供。

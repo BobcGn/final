@@ -138,32 +138,46 @@
   border: 1rpx solid rgba(255, 255, 255, 0.05);
   overflow: hidden;
 }
-.grid-line {
-  height: 1rpx;
-  margin: 0 22rpx;
-  background: rgba(255, 255, 255, 0.05);
-}
-.chart-mask {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  text-align: center;
-}
-.chart-mask-title {
-  font-size: 26rpx;
-  color: var(--text-2);
-}
-.chart-mask-sub {
-  margin-top: 8rpx;
-  font-size: 20rpx;
-  color: var(--text-3);
-}
+
+
+
+
 .chart-xaxis {
   display: flex;
   justify-content: space-between;
   margin-top: 16rpx;
   font-size: 20rpx;
   color: var(--text-3);
+}
+
+/* ============ 折线图画布（Canvas 2D，团队实现） ============ */
+.chart-body {
+  position: relative;
+  height: 420rpx;
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, 0.18);
+  border: 1rpx solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.trends-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.chart-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 24rpx;
+  color: var(--text-2);
+}
+.chart-retry {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: var(--accent);
+  text-decoration: underline;
 }

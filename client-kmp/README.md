@@ -200,8 +200,8 @@ cd client-kmp
 # MiniApp 运行时不得携带 Compose/Skiko
 ./gradlew --no-configuration-cache :shared:checkMiniAppHostBoundary
 
-# 微信工程自包含 + 入口文件存在 + 「只有设备 ACK 才算成功」的闸门仍在（root 工程任务）
-./gradlew --no-configuration-cache prepareMiniAppHost
+# 微信工程自包含 + 入口文件存在 + 「只有设备 ACK 才算成功」的闸门（root 工程任务）
+./gradlew --no-configuration-cache checkMiniAppHostSelfContained
 
 # 覆盖率报告（Kover）；koverVerify 对共享逻辑执行 80% 行覆盖下限
 ./gradlew --no-configuration-cache :shared:koverXmlReport :shared:koverVerify
@@ -216,7 +216,8 @@ cd client-kmp
 > 任务名注意：本仓库**没有** `:shared:jsNodeTest` 任务。JS/Node 侧的测试任务名是
 > `:shared:miniappTest`（其执行器是 `:shared:miniappNodeTest`）。另外
 > `checkMiniAppHostBoundary` 是插件任务，而更严格的「微信工程自包含 + toast 闸门」
-> 检查是 root 工程的 `checkMiniAppHostSelfContained`，由 `prepareMiniAppHost` 触发。
+> 检查是 root 工程的 `checkMiniAppHostSelfContained`（它 `dependsOn` `prepareMiniAppHost`；单独执行
+> `prepareMiniAppHost` 只做同步，不会运行闸门）。
 
 覆盖率口径：仅统计 `org.example.client_kmp.monitoring`（两端共同的业务规则），
 排除编译器生成的嵌套类。Compose 页面、WXML Host 与生成 bundle 属于 Host 代码，
@@ -262,9 +263,9 @@ Android 平台测试对真实 loopback HTTP 服务发起请求，覆盖 `HttpURL
 
 ## 五、与微信原生 baseline 的对齐
 
-`client-wx-native` 是**视觉与交互 baseline**：四个页面的信息结构、标题/副标题、暗色背景与薄荷绿强调色、卡片圆角与间距、字号层级、底部四项导航与选中态都按它对齐。本轮以它为准的项目：
+`client-wx-native` 是**视觉与交互 baseline**：四个页面的信息结构、标题/副标题、暗色背景与薄荷绿强调色、卡片圆角与间距、字号层级、底部四项导航与选中态都按它对齐（对齐以 Android 端四页为准；KMP 的 MiniApp 宿主当前只有 `pages/monitor` 一页，见 `miniApp/app.json`）。本轮以它为准的项目：
 
-- 趋势页：`近1小时 / 近6小时 / 近24小时` 时间窗选择器（驱动查询的 `from`/`to` 绝对边界）、温度/湿度/气体三张统计卡（平均为数字、最低、最高、**峰值时间**）、以及**曲线占位区**——图例 + 四条网格线 + 遮罩文案 + 两端轴标签。
+- 趋势页：`近1小时 / 近6小时 / 近24小时` 时间窗选择器（驱动查询的 `from`/`to` 绝对边界）、温度/湿度/气体三张统计卡（平均为数字、最低、最高、**峰值时间**）、以及**曲线图区**——图例 + 四条网格线 + Canvas 折线图 + 两端轴标签。
 - 告警页：`全部 / 火情 / 疑似 / 已恢复` 筛选条；卡片为「状态头 + 触发证据面板（2×2）+ 恢复行」。
 - 设置页：温度上限与气体浓度上限两个滑块；期望版本 / 设备确认版本 / 同步状态与保存按钮文案。
 - 监控页：风险卡、三张仪表卡、设备状态卡、蜂鸣器控制卡。
@@ -281,8 +282,7 @@ Android 平台测试对真实 loopback HTTP 服务发起请求，覆盖 `HttpURL
 | 设置页湿度上限 | 未提供 | 同样不提供控件，但**仍随每次下发携带当前值** | 契约要求阈值更新必须带齐三个字段，丢掉湿度会让每次保存被拒。缺一个可编辑的湿度控件属未完成项，见下节 |
 | 温度上限滑块步长 | `0.5` | `1` | 设备把小数阈值四舍五入到整度执行（`docs/device-protocol.md` §4.3）；步长 0.5 会让「显示 30.5、设备执行 31」 |
 | 告警筛选的第三个 pill | `已确认` | `疑似` | 后端告警状态枚举没有 `acknowledged`（只有 `normal`/`suspect`/`fire_warning`/`recovered`），照搬会让该 pill 永远筛不出任何记录 |
-| 触发证据第一格 | `气体上升`（ppm） | `气体 ADC 上升`（ADC 码） | 本工程消费的契约字段是 ADC 码增量，不是 ppm 增量；沿用 ppm 标签会给一个不在该单位的数字贴错单位 |
-| 趋势曲线 | 占位框（`折线图下一步接入`） | 同样的占位框 | 两端都还没有画曲线；用采样列表冒充趋势图等于把未完成的设计目标报成已完成。`curveReady` 为 `false` 就是这一事实的唯一标记 |
+| 趋势曲线 | Canvas 2D 真实折线图 | Android Compose Canvas 与 MiniApp Canvas 2D 真实三指标折线图 | 两端均接入独立 Y 轴缩放（10% padding）、气体缺失（null）打断折线段、时间比例 X 轴分布；`curveReady` 在有数据时为 `true` |
 
 ### 运行选择器与取数的关系
 
@@ -295,16 +295,17 @@ GET /api/v1/devices/MCU001/telemetry
 
 `order=desc` 是有意的：只给 `limit` 会返回区间内**最早**的那些行，于是「近24小时」描述的是它开头的几分钟，却被当成整段区间。取到之后在共享层反转为时间升序，统计与展示都按升序读。
 
-**已知边界**：契约没有聚合端点，一个窗口内的样本数可能超过一页（设备每 5 秒上报，一小时就有约 720 行，而页面大小是 200）。因此统计描述的是**该窗口内最近一页**的样本，不是窗口内全部样本；「共 N 条样本」里的 N 是这一页的行数。要覆盖整个窗口需要聚合端点。
+**已知边界**：契约没有聚合端点，一个窗口内的样本数可能超过一页（按契约 5 秒周期一小时约 720 行、当前固件名义 1 秒则更多——见 `docs/device-protocol.md` §5.2——而页面大小是 200）。因此统计描述的是**该窗口内最近一页**的样本，不是窗口内全部样本；「共 N 条样本」里的 N 是这一页的行数。要覆盖整个窗口需要聚合端点。
 
 ### 实机/模拟器验证结果（2026-09-22）
 
 **Android 模拟器**（Pixel_9_Pro，1280×2856，480dpi，`http://10.0.2.2:8080` 连本机 Backend）：
+（下表「截图」列为验收时的本地文件名，**未提交入库**——仓库不含 `android-*.png`；核对结论以文字记录为准。）
 
 | 页面 | 截图 | 核对结果 |
 | --- | --- | --- |
 | 监控 | `android-1-dashboard.png` | 「机房环境总览 / 智慧机房 · 实时动环监测」；风险卡 + 在线 pill；温度 32 / 湿度 42 / 气体 95 **均为整数**；设备状态三行；蜂鸣器控制卡带 baseline 文案「静音不影响环境检测与告警上报」 |
-| 趋势 | `android-2-trends.png` | 三个时间窗 pill，「近1小时」为选中态；三张统计卡含最低/最高/峰值时间（如「峰值 02:55:36」）；曲线区是占位框（图例 + 网格线 + 「趋势曲线即将上线 / 三指标同屏对比」+ 区间起点/此刻），**没有采样列表**；页脚提示与 baseline 一致 |
+| 趋势 | `android-2-trends.png` | 三个时间窗 pill，「近1小时」为选中态；三张统计卡含最低/最高/峰值时间（如「峰值 02:55:36」）；曲线区是真实折线图（图例 + 网格线 + Canvas 三指标曲线 + 区间起点/此刻），**没有采样列表**；页脚提示与 baseline 一致 |
 | 告警 | `android-3-alerts.png` | 「告警记录 / 早期火情预警事件」；四个筛选 pill；卡片为状态 pill + 触发证据 2×2（气体 ADC 上升 1204 / 触发阈值 150 / 温升速率 / 样本数）+ 恢复行 |
 | 设置 | `android-4-settings.png` | 仅温度上限与气体浓度上限两个滑块，轨道与滑块为薄荷绿（非 Material 默认紫）；设备确认四行；期望版本 = 设备确认版本 = 5 |
 
@@ -322,9 +323,7 @@ MiniApp 侧目前只有 `:shared:miniappTest`（JS 运行时）与 `checkMiniApp
 - **实时推送未接入**：契约中 `/ws/v1/...` WebSocket 与 `WsEnvelope` 尚未在客户端实现，
   当前仅 REST 轮询（仪表盘 3 秒）。
 - **告警确认（acknowledge）未实现**：阶段一无该端点，`AlertState` 因此不含 `acknowledged`。
-- **趋势曲线仍是占位框**：未引入图表库，两端都不绘制曲线。共享模型保留升序采样序列
-  （`trends.series`）供将来接图使用，但**页面不再渲染它**——用采样列表冒充趋势图等于把
-  未完成的设计目标报成已完成。`TrendsView.curveReady` 恒为 `false` 就是这一事实的标记。
+- **趋势曲线已接入真实折线图**：Android Compose Canvas 与 MiniApp Canvas 2D 均已接入真实三指标折线图（温度、湿度、气体独立 Y 轴缩放，气体缺失打断，时间比例 X 轴）；受限于单页查询，当前折线图绘制最近一页最多 200 条样本。
 - **历史查询无分页**：窗口已用 `from`/`to` 表达（见上节），但只取一页；`cursor` 未暴露，
   窗口内样本多于一页时统计只覆盖最近一页。
 - **设置页缺湿度控件**：baseline 只有温度与气体两个滑块，本工程照此实现；湿度值仍随每次

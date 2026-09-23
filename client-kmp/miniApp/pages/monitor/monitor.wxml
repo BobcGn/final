@@ -5,9 +5,9 @@
 
   Layout follows client-wx-native, the frozen visual baseline: page head, section
   heads, glass cards, a segmented selector and a four-item bottom bar. The trends
-  curve is the baseline's placeholder frame — a legend, four grid lines, a masked
-  note and two axis labels — and deliberately not a list of samples. See
-  `curveReady` in the shared model.
+  curve is a chart frame — a legend, four grid lines and two axis labels — around
+  the canvas that draws the shared geometry, and deliberately not a list of
+  samples. See `curveReady` in the shared model.
 -->
 <view class="page">
   <view class="page-head">
@@ -124,15 +124,12 @@
       <view class="card chart-card">
         <view class="legend">
           <view class="legend-item" wx:for="{{trends.curveLegend}}" wx:key="label">
-            <view class="legend-dot dot-{{item.tone}}"></view><text>{{item.label}}</text>
+            <view class="legend-dot dot-{{item.tone}}"></view>
+            <text>{{item.label}}{{item.rangeText && item.rangeText !== '--' ? ' (' + item.rangeText + ')' : ''}}</text>
           </view>
         </view>
         <view class="chart-body">
-          <view class="grid-line" wx:for="{{[0,1,2,3]}}" wx:key="*this"></view>
-          <view class="chart-mask">
-            <view class="chart-mask-title">{{trends.curveMaskTitle}}</view>
-            <view class="chart-mask-sub">{{trends.curveMaskSub}}</view>
-          </view>
+          <canvas type="2d" id="trendCanvas" class="trend-canvas"></canvas>
         </view>
         <view class="chart-xaxis"><text>{{trends.curveAxisStart}}</text><text>{{trends.curveAxisEnd}}</text></view>
       </view>

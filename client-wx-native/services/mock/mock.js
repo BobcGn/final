@@ -181,6 +181,9 @@ function getHistory(query) {
     temp = clamp(temp + rand(-0.2, 0.2), 24.5, 30.5)
     hum = clamp(hum + rand(-1, 1), 48, 72)
     gas = clamp(gas + rand(-1.5, 1.5), 12, 45)
+    // 每 9 个样本模拟一次"气体未标定"：gasPpm 为 null，
+    // 用于验证折线图的缺失分段（绝不把缺失画成 0）
+    const gasCalibrated = i % 9 !== 4
     items.push({
       deviceId: 'MCU001',
       sequence: state.seq - i,
@@ -191,7 +194,8 @@ function getHistory(query) {
       humidityRh: round1(hum),
       gasAdcRaw: Math.round(gas * 52),
       gasAdcFiltered: Math.round(gas * 52) - 12,
-      gasPpm: round1(gas),
+      gasCalibrated,
+      gasPpm: gasCalibrated ? round1(gas) : null,
       localAlarm: false,
       alarmCauses: [],
       buzzerMuted: state.buzzerMuted,

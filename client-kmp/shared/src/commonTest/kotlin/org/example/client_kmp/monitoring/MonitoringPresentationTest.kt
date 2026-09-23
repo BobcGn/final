@@ -261,6 +261,43 @@ class MonitoringPresentationTest {
     }
 
     @Test
+    fun anUnparseableTimestampYieldsANullEpochRatherThanAForgedZero() {
+        // 0 would be a real instant (the Unix epoch). An unparseable timestamp
+        // has no instant at all, so the model must say so explicitly.
+        val view = MonitoringPresentation.trends(listOf(point(receivedAt = "not-a-timestamp")))
+        assertEquals(null, view.series.single().timestampEpochMs)
+
+        val good = MonitoringPresentation.trends(listOf(point(receivedAt = "2026-09-21T10:00:00Z")))
+        assertEquals(
+            Rfc3339.parseEpochMillis("2026-09-21T10:00:00Z"),
+            good.series.single().timestampEpochMs,
+        )
+    }
+
+    @Test
+    fun anUnreliableAxisEndpointReadsDoubleDashInsteadOfInventingATime() {
+        // Mixed reliability: the end keeps its clock, the start degrades to `--`.
+        val mixed = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "not-a-timestamp"),
+                point(receivedAt = "2026-09-21T11:00:00Z"),
+            ),
+        )
+        assertEquals("--", mixed.curveAxisStart)
+        assertEquals("11:00:00", mixed.curveAxisEnd)
+
+        // No reliable endpoint at all: both ends degrade to `--`.
+        val allBad = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "bad-1"),
+                point(receivedAt = "bad-2"),
+            ),
+        )
+        assertEquals("--", allBad.curveAxisStart)
+        assertEquals("--", allBad.curveAxisEnd)
+    }
+
+    @Test
     fun historyRowRendersGasAsPlaceholderOnlyWhenItIsAbsent() {
         val view = MonitoringPresentation.trends(listOf(point(gasPpm = null), point(gasPpm = 0.0)))
 
@@ -549,7 +586,7 @@ class MonitoringPresentationTest {
 
     // --- fixtures ---------------------------------------------------------------------------
 
-    // --- trends: window selector, peak time, curve placeholder -------------------------
+    // --- trends: window selector, peak time, curve readiness -------------------------
 
     @Test
     fun theWindowSelectorOffersAllThreeBaselineWindowsAndMarksTheActiveOne() {
@@ -564,23 +601,26 @@ class MonitoringPresentationTest {
     }
 
     @Test
-    fun theCurveBlockIsAMarkedPlaceholderCarryingTheBaselineCopy() {
+    fun theCurveBlockIsRealTrendCurveCarryingIndependentScaleCopy() {
         val view = MonitoringPresentation.trends(listOf(point()))
 
-        // Nothing in this client plots data yet, so the flag must stay false.
-        // A sample list rendered where the curve belongs would report the design
-        // goal as met, which is why the flag exists at all.
-        assertFalse(view.curveReady)
-        assertEquals("折线图下一步接入", view.curveStatusText)
-        assertEquals("趋势曲线即将上线", view.curveMaskTitle)
-        assertEquals("三指标同屏对比", view.curveMaskSub)
-        assertEquals("区间起点", view.curveAxisStart)
-        assertEquals("此刻", view.curveAxisEnd)
-        assertEquals("统计基于所选区间内的真实历史样本计算", view.footerHint)
+        assertTrue(view.curveReady)
+        assertEquals("各指标按独立量程展示", view.curveStatusText)
+        assertEquals("三条曲线按各自量程展示", view.curveMaskTitle)
+        assertEquals("用于观察变化趋势，不用于直接比较曲线高度", view.curveMaskSub)
+        assertEquals("10:00:00", view.curveAxisStart)
+        assertEquals("10:00:00", view.curveAxisEnd)
+        assertEquals("三条曲线按各自量程展示，用于观察变化趋势，不用于直接比较曲线高度；数据受最近一页最多200条限制", view.footerHint)
         assertEquals(
             listOf("温度" to Tone.DANGER, "湿度" to Tone.INFO, "气体" to Tone.MINT),
             view.curveLegend.map { it.label to it.tone },
         )
+
+        val emptyView = MonitoringPresentation.trends(emptyList())
+        assertFalse(emptyView.curveReady)
+        assertEquals("暂无数据", emptyView.curveStatusText)
+        assertEquals("--", emptyView.curveAxisStart)
+        assertEquals("--", emptyView.curveAxisEnd)
     }
 
     @Test

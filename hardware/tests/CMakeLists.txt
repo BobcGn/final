@@ -32,6 +32,8 @@ set(CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/telemetry_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/command_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/mqtt_packet.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/control_link.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/session_dispatch.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/threshold_store.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/boot_id.c"
 )
@@ -46,6 +48,8 @@ set(TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/test_telemetry_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_command_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_mqtt_packet.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_control_link.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_session_dispatch.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_threshold_store.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_boot_id.c"
 )

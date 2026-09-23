@@ -17,6 +17,14 @@ static volatile uint16_t s_messageLength = 0U;
 static volatile uint16_t s_ipdPayloadRemaining = 0U;
 static volatile uint8_t s_messageReady = 0U;
 static volatile uint8_t s_ipdState = 0U;
+/* Set while the payload of the current +IPD frame is being consumed without
+ * being stored, because an earlier frame has not been collected yet. */
+static volatile uint8_t s_messageDiscard = 0U;
+/* Receive frames the driver could not hand up. They are counted so that a lost
+ * control command is visible instead of looking like a broker that sent nothing;
+ * device/control is QoS 1, so the broker's redelivery is what recovers them. */
+static volatile uint32_t s_discardedFrames = 0U;
+static volatile uint32_t s_truncatedFrames = 0U;
 static volatile uint8_t s_wifiConnected = 0U;
 static volatile uint8_t s_tcpConnected = 0U;
 static volatile uint8_t s_registered = 0U;
@@ -98,23 +106,44 @@ static void ESP8266_ParseIncomingByte(char received) {
       s_ipdPayloadRemaining =
           (uint16_t)(s_ipdPayloadRemaining * 10U + (uint16_t)(received - '0'));
     } else if ((received == ':') && (s_ipdPayloadRemaining > 0U)) {
-      s_messageLength = 0U;
-      s_wifiGotIpIndex = 0U;
-      s_wifiDisconnectIndex = 0U;
+      if (s_messageReady != 0U) {
+        /* A previous frame is still waiting to be collected. Starting this one
+         * in the same buffer would overwrite it without a trace, so this frame's
+         * payload is consumed and dropped instead and the loss is counted. The
+         * older frame is kept because it was delivered first: it may be the
+         * CONNACK or SUBACK the session is waiting on, and a command it carries
+         * is lost only until the broker redelivers at QoS 1. */
+        s_messageDiscard = 1U;
+        s_discardedFrames++;
+      } else {
+        s_messageDiscard = 0U;
+        s_messageLength = 0U;
+        s_wifiGotIpIndex = 0U;
+        s_wifiDisconnectIndex = 0U;
+      }
       s_ipdState = 6U;
     } else {
       s_ipdState = 0U;
     }
     break;
   case 6U:
-    if (s_messageLength < ESP8266_MESSAGE_BUFFER_SIZE) {
-      s_messageBuffer[s_messageLength] = (uint8_t)received;
-      s_messageLength++;
+    if (s_messageDiscard == 0U) {
+      if (s_messageLength < ESP8266_MESSAGE_BUFFER_SIZE) {
+        s_messageBuffer[s_messageLength] = (uint8_t)received;
+        s_messageLength++;
+      } else if (s_truncatedFrames == 0U) {
+        /* The payload is longer than the buffer, so what is stored is a prefix
+         * that will not parse. Counted once per frame rather than once per byte. */
+        s_truncatedFrames++;
+      }
     }
 
     s_ipdPayloadRemaining--;
     if (s_ipdPayloadRemaining == 0U) {
-      s_messageReady = 1U;
+      if (s_messageDiscard == 0U) {
+        s_messageReady = 1U;
+      }
+      s_messageDiscard = 0U;
       s_ipdState = 0U;
     }
     break;
@@ -468,6 +497,14 @@ uint8_t ESP8266_GetPacket(uint8_t *buffer, uint16_t capacity,
   s_messageReady = 0U;
   USART_ITConfig(ESP8266_USART, USART_IT_RXNE, ENABLE);
   return 1U;
+}
+
+void ESP8266_GetReceiveStats(ESP8266ReceiveStats *stats) {
+  if (stats == 0) {
+    return;
+  }
+  stats->discarded_frames = s_discardedFrames;
+  stats->truncated_frames = s_truncatedFrames;
 }
 
 void ESP8266_SetData(uint16_t gasPpm, uint8_t temperature, uint8_t humidity) {

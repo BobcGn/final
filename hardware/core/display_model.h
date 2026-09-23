@@ -70,6 +70,13 @@ typedef struct
     /* The most recent message pushed from the server, shown on the network page.
      * May be NULL or empty. */
     const char *server_message;
+    /* Receive frames the radio driver could not hand up: one dropped because an
+     * earlier frame was still unread, and one longer than the receive buffer.
+     * They are shown on the network page when non-zero, because a dropped
+     * device/control frame is otherwise invisible and the operator would have no
+     * way to tell a silent broker from a lost command. */
+    uint32_t rx_discarded;
+    uint32_t rx_truncated;
 } DisplayInput;
 
 /* One rendered page: four NUL-terminated lines of at most

@@ -18,6 +18,8 @@ void test_json_writer_suite(void);
 void test_telemetry_json_suite(void);
 void test_command_json_suite(void);
 void test_mqtt_packet_suite(void);
+void test_control_link_suite(void);
+void test_session_dispatch_suite(void);
 void test_threshold_store_suite(void);
 void test_boot_id_suite(void);
 
@@ -30,6 +32,8 @@ int main(void)
     test_run_suite("telemetry_json", test_telemetry_json_suite);
     test_run_suite("command_json", test_command_json_suite);
     test_run_suite("mqtt_packet", test_mqtt_packet_suite);
+    test_run_suite("control_link", test_control_link_suite);
+    test_run_suite("session_dispatch", test_session_dispatch_suite);
     test_run_suite("threshold_store", test_threshold_store_suite);
     test_run_suite("boot_id", test_boot_id_suite);
     return test_finish();

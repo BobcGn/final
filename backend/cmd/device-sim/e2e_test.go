@@ -694,3 +694,39 @@ func TestOfflineDetectionOverTheAPI(t *testing.T) {
 	}
 	t.Fatal("timed out waiting for the device to be reported offline")
 }
+
+// TestScenarioFor verifies all built-in simulator scenario generators.
+func TestScenarioFor(t *testing.T) {
+	cases := []struct {
+		name      string
+		shouldErr bool
+	}{
+		{name: "quiet", shouldErr: false},
+		{name: "gas-surge", shouldErr: false},
+		{name: "warm-up", shouldErr: false},
+		{name: "fire-alarm", shouldErr: false},
+		{name: "invalid-name", shouldErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gen, err := scenarioFor(tc.name)
+			if tc.shouldErr {
+				if err == nil {
+					t.Fatalf("scenarioFor(%q) expected error, got nil", tc.name)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("scenarioFor(%q) unexpected error: %v", tc.name, err)
+			}
+			// Verify generator produces valid samples across steps
+			s0 := gen(0)
+			s5 := gen(5)
+			s10 := gen(10)
+			if s0.TemperatureC <= 0 || s5.TemperatureC <= 0 || s10.TemperatureC <= 0 {
+				t.Fatalf("scenarioFor(%q) produced non-positive temperature", tc.name)
+			}
+		})
+	}
+}

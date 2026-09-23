@@ -503,3 +503,102 @@ func assertSameSet(t *testing.T, description string, want, got []string) {
 	}
 	t.Fatalf("%s differ:\n  documented: %v\n  implemented: %v", description, want, got)
 }
+
+// TestAlertEvidencePropertiesMatchTheContract compares the wire key names of
+// the alert evidence with the names the OpenAPI schema documents.
+//
+// This is the check that was missing when the evidence was marshalled from the
+// untagged domain type and went out as GasAdcRise. A response decoded into a Go
+// struct cannot catch it: encoding/json accepts a PascalCase key for a struct
+// that declares camelCase. Only comparing the raw key strings can.
+func TestAlertEvidencePropertiesMatchTheContract(t *testing.T) {
+	document := loadOpenAPI(t)
+	properties := dig(t, document, "components", "schemas", "AlertEvidence", "properties")
+	fields, ok := properties.(map[string]any)
+	if !ok {
+		t.Fatalf("AlertEvidence.properties is %T, want a mapping", properties)
+	}
+	documented := make([]string, 0, len(fields))
+	for name := range fields {
+		documented = append(documented, name)
+	}
+	sort.Strings(documented)
+
+	// The six fields the contract names. Both wire types emit exactly these,
+	// which is what makes the set a real contract and not just a type's shape.
+	emitted := []string{
+		"gasAdcRise",
+		"gasAdcRiseThreshold",
+		"temperatureRateCPerMinute",
+		"temperatureRateThresholdCPerMinute",
+		"sampleCount",
+		"windowSeconds",
+	}
+	sort.Strings(emitted)
+
+	assertSameSet(t, "alert evidence fields", documented, emitted)
+
+	for _, name := range documented {
+		if name != strings.ToLower(name[:1])+name[1:] || strings.Contains(name, "_") {
+			t.Errorf("AlertEvidence property %q is not lowerCamelCase", name)
+		}
+		if name[0] >= 'A' && name[0] <= 'Z' {
+			t.Errorf("AlertEvidence property %q looks like a Go name; the contract uses camelCase", name)
+		}
+	}
+}
+
+// TestAlertEvidenceRequiredMatchesWhatTheBackendGuarantees settles the
+// contract question of which evidence fields are optional.
+//
+// All six are always emitted: domain.AlertEvidence has no optional members, so
+// a stored alert always carries every value. The schema lists only three as
+// required, which is a conservative statement about what a reader must tolerate
+// rather than a description of this backend. The two are reconciled here rather
+// than by loosening the schema or by pretending a field is optional that is not:
+// the schema's required set is a subset of what is guaranteed.
+func TestAlertEvidenceRequiredMatchesWhatTheBackendGuarantees(t *testing.T) {
+	document := loadOpenAPI(t)
+	required := stringList(t, dig(t, document, "components", "schemas", "AlertEvidence", "required"), "AlertEvidence.required")
+
+	guaranteed := []string{
+		"gasAdcRise",
+		"gasAdcRiseThreshold",
+		"temperatureRateCPerMinute",
+		"temperatureRateThresholdCPerMinute",
+		"sampleCount",
+		"windowSeconds",
+	}
+
+	for _, name := range required {
+		found := false
+		for _, field := range guaranteed {
+			if field == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("the schema requires %q but the backend never emits it", name)
+		}
+	}
+
+	// The three the schema leaves out are exactly the ones a client is allowed
+	// to tolerate as absent. Pin the set so a change to it is a deliberate one.
+	optional := make([]string, 0)
+	for _, field := range guaranteed {
+		listed := false
+		for _, name := range required {
+			if name == field {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			optional = append(optional, field)
+		}
+	}
+	sort.Strings(optional)
+	assertSameSet(t, "optional alert evidence fields", optional,
+		[]string{"gasAdcRiseThreshold", "temperatureRateThresholdCPerMinute", "windowSeconds"})
+}

@@ -33,6 +33,12 @@ var (
 	ErrNotConnected = errors.New("mqtt: not connected")
 	// ErrPublishTimeout reports a QoS 1 publish that was never acknowledged.
 	ErrPublishTimeout = errors.New("mqtt: publish acknowledgement timed out")
+	// ErrConnectionLost reports a publish that was written to a connection which
+	// then ended before its PUBACK arrived. It is deliberately distinct from
+	// ErrPublishTimeout: the caller must be able to tell "the broker never
+	// answered" from "the link went away", because only the first is a reason to
+	// suspect the message itself was refused.
+	ErrConnectionLost = errors.New("mqtt: connection ended before the publish was acknowledged")
 	// ErrRejected reports a broker that refused a subscribe or a connect.
 	ErrRejected = errors.New("mqtt: broker rejected the request")
 )
@@ -62,6 +68,17 @@ type Config struct {
 	Password string
 	// KeepAlive is the negotiated keep-alive interval.
 	KeepAlive time.Duration
+	// PingAfter overrides how long the client waits before sending a PINGREQ.
+	//
+	// It defaults to a fraction of [Config.KeepAlive] rather than the whole of it.
+	// MQTT 3.1.1 §3.1.2.10 requires *at least one* control packet to reach the
+	// broker within 1.5 keep-alive intervals of each other, so sending exactly at
+	// the interval leaves a single scheduling hiccup to break the link. A half
+	// interval gives the wire twice the budget it strictly needs, which is the
+	// margin a jittery scheduler and a slow broker both want. It exists as a
+	// field rather than a constant so a test can run the keep-alive logic on a
+	// millisecond budget instead of sleeping through whole keep-alive periods.
+	PingAfter time.Duration
 	// CleanSession requests a fresh session on every connect.
 	CleanSession bool
 	// Subscriptions are established after every successful connect.
@@ -83,6 +100,11 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.KeepAlive <= 0 {
 		c.KeepAlive = DefaultKeepAlive
+	}
+	if c.PingAfter <= 0 {
+		// Half the keep-alive: see the field comment for why a fraction and not
+		// the whole interval.
+		c.PingAfter = c.KeepAlive / 2
 	}
 	if c.ReconnectMin <= 0 {
 		c.ReconnectMin = DefaultReconnectMin
@@ -119,6 +141,11 @@ func (c Config) validate() error {
 		// guaranteed bound keeps the client portable across brokers.
 		return fmt.Errorf("mqtt: client id %q exceeds 23 bytes", c.ClientID)
 	}
+	// The one-second floor is MQTT's own unit: the CONNECT field is whole
+	// seconds, so a sub-second keep-alive is negotiated as zero — which means "no
+	// keep-alive at all" — while the client would still be pinging at a fraction
+	// of one. Refusing the configuration is the only outcome that keeps the
+	// negotiated interval and the client's behaviour in agreement.
 	if c.KeepAlive > 0 && c.KeepAlive < time.Second {
 		return fmt.Errorf("mqtt: keep alive %s is below one second", c.KeepAlive)
 	}
@@ -141,9 +168,37 @@ type Client struct {
 	connected bool
 	connEpoch uint64
 
+	// pendingMu guards the in-flight QoS 1 acknowledgement table. Entries are
+	// closed exactly once, by whichever of the two outcomes happens first: the
+	// matching PUBACK arriving on this epoch's connection, or the connection
+	// ending. A waiter is closed with a result so the reader can tell those two
+	// apart — see waiter.
 	pendingMu sync.Mutex
-	pending   map[uint16]chan struct{}
+	pending   map[uint16]*waiter
 	nextID    uint16
+
+	// lastSend is when this client last put any packet on the wire. The keep-alive
+	// goroutine pings only once that is older than the ping cadence, so an
+	// application publish pushes the next PINGREQ out instead of being followed
+	// by one.
+	lastSendMu sync.Mutex
+	lastSend   time.Time
+}
+
+// waiter is the rendezvous between one in-flight QoS 1 publish and whatever
+// settles it.
+//
+// It exists because a bare channel cannot say *why* it was closed. Closing on
+// connection loss and closing on a real PUBACK look identical to a reader, and
+// treating the first as the second is exactly the bug this replaced: it
+// reported a command as published when the broker never acknowledged it. The
+// buffered channel carries the outcome instead.
+type waiter struct {
+	// epoch is the connection epoch the publish was written on. A PUBACK only
+	// completes a waiter whose epoch matches the connection it arrived on, so an
+	// acknowledgement from an earlier session can never settle a later one.
+	epoch   uint64
+	outcome chan error
 }
 
 // New validates cfg and returns a client. It does not connect.
@@ -152,7 +207,7 @@ func New(cfg Config) (*Client, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &Client{cfg: cfg, pending: make(map[uint16]chan struct{}), nextID: 1}, nil
+	return &Client{cfg: cfg, pending: make(map[uint16]*waiter), nextID: 1}, nil
 }
 
 // KeepAlive returns the configured keep-alive interval.
@@ -169,15 +224,29 @@ func (c *Client) Connected() bool {
 // reconnects with exponential backoff after any failure, including a rejected
 // connect, so that a broker restart or a wrong credential is retried instead of
 // silently stopping the ingress path.
+//
+// The backoff grows only across *consecutive* failures. A session that reached
+// the connected state, however briefly, proves the broker is reachable again and
+// the delay is reset to ReconnectMin before the next attempt is scheduled —
+// otherwise one long outage would leave the client waiting ReconnectMax after
+// every later hiccup, and a recovered broker would sit idle for thirty seconds
+// per restart.
 func (c *Client) Run(ctx context.Context) error {
 	backoff := c.cfg.ReconnectMin
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		epochBefore := c.epoch()
 		err := c.session(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if c.epoch() != epochBefore {
+			// The session got as far as reporting itself connected before it
+			// ended. That is a healthy link going quiet on us, not a persistent
+			// failure, so the delay must not keep growing across retries.
+			backoff = c.cfg.ReconnectMin
 		}
 		c.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "mqtt session ended; reconnecting",
 			slog.String("error", errorString(err)),
@@ -211,7 +280,13 @@ func (c *Client) session(ctx context.Context) error {
 	if c.cfg.TLS != nil {
 		conn = tls.Client(conn, c.cfg.TLS)
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		// Every in-flight acknowledgement wait belongs to this connection and
+		// must end with it. Ending them here rather than in the epoch bump below
+		// keeps a waiter from outliving the socket it was written on.
+		c.failPending()
+		_ = conn.Close()
+	}()
 
 	if err := c.handshake(conn); err != nil {
 		return err
@@ -250,7 +325,7 @@ func (c *Client) session(ctx context.Context) error {
 		}
 	}()
 
-	if err := c.readLoop(ctx, conn); err != nil {
+	if err := c.readLoop(ctx, conn, c.epoch()); err != nil {
 		return err
 	}
 	return nil
@@ -339,7 +414,11 @@ func (c *Client) subscribe(conn net.Conn) error {
 }
 
 // readLoop serves packets until the connection fails.
-func (c *Client) readLoop(ctx context.Context, conn net.Conn) error {
+//
+// There is exactly one reader per connection: the handshake, the subscription
+// exchange and this loop all run on the same goroutine and never overlap. Two
+// readers on one MQTT stream would interleave frames and corrupt the session.
+func (c *Client) readLoop(ctx context.Context, conn net.Conn, epoch uint64) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -363,9 +442,12 @@ func (c *Client) readLoop(ctx context.Context, conn net.Conn) error {
 				return err
 			}
 		case PacketPUBACK:
-			c.completePending(packet.PacketID)
+			c.completePending(packet.PacketID, epoch)
 		case PacketPINGRESP:
-			// Liveness only; the read deadline already covers the failure case.
+			// The acknowledgement is what matters, and only in that it arrived at
+			// all: it proves the peer is reading. Recording it would need a
+			// second clock to give the fact any force, and the read deadline
+			// already ends the session when one stops coming.
 		default:
 			c.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "ignoring unexpected packet",
 				slog.String("type", packet.Type.String()))
@@ -393,9 +475,28 @@ func (c *Client) handlePublish(ctx context.Context, conn net.Conn, packet Packet
 	return nil
 }
 
-// pingLoop sends PINGREQ at the keep-alive interval.
+// pingLoop keeps the session alive by putting a control packet on the wire well
+// inside the negotiated keep-alive window.
+//
+// The cadence is idle-driven, not a fixed tick: a ping is sent only once nothing
+// has been written for PingAfter. Any outbound packet is a keep-alive packet as
+// far as MQTT is concerned, so an application publish pushes the next PINGREQ
+// out instead of being followed by a redundant one. Inbound traffic does not —
+// the client is responsible for keeping *its own* send half alive.
+//
+// Sending at the keep-alive interval itself is what the protocol forbids: one
+// tick landing late means the broker sees a gap wider than 1.5 intervals and
+// closes the link. Pinging at half the interval leaves the wire twice the margin
+// it needs.
 func (c *Client) pingLoop(ctx context.Context, conn net.Conn) {
-	ticker := time.NewTicker(c.cfg.KeepAlive)
+	// Short ticks rather than one long timer: the deadline is about idle time,
+	// and a fixed timer cannot know that the application has been writing in the
+	// meantime.
+	tick := c.cfg.PingAfter / 4
+	if tick <= 0 {
+		tick = time.Millisecond
+	}
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 
 	for {
@@ -403,6 +504,9 @@ func (c *Client) pingLoop(ctx context.Context, conn net.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if c.sinceLastSend() < c.cfg.PingAfter {
+				continue
+			}
 			if err := c.writePacket(conn, &Packet{Type: PacketPINGREQ}); err != nil {
 				c.cfg.Logger.LogAttrs(ctx, slog.LevelWarn, "keep-alive ping failed",
 					slog.String("error", err.Error()))
@@ -417,9 +521,23 @@ func (c *Client) pingLoop(ctx context.Context, conn net.Conn) {
 // Publish sends an application message. QoS 1 waits for the broker's PUBACK and
 // returns ErrPublishTimeout when it never arrives; QoS 0 returns once the bytes
 // are written and therefore reports only a successful hand-off to the socket.
+//
+// A QoS 1 publish resolves to exactly one of four outcomes, and a caller that
+// must not lose a command needs to tell them apart:
+//
+//   - nil: the broker sent a PUBACK for this packet identifier on this
+//     connection. The message is the broker's responsibility from here.
+//   - ErrPublishTimeout: nothing acknowledged it in the time allowed. The
+//     message may or may not have been accepted.
+//   - ErrConnectionLost: the socket ended before an acknowledgement arrived.
+//     The message may or may not have been accepted.
+//   - ctx.Err(): the caller stopped waiting.
+//
+// None of the failure cases can be resolved as nil: an unacknowledged publish is
+// never reported as delivered.
 func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos byte) error {
-	conn := c.connection()
-	if conn == nil {
+	conn, epoch, ok := c.connection()
+	if !ok {
 		return ErrNotConnected
 	}
 	if qos > 1 {
@@ -430,14 +548,19 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 	if qos == 1 {
 		packet.SetPublishFlags(false, 1, false)
 		packet.PacketID = c.allocatePacketID()
-		waiter := c.registerPending(packet.PacketID)
+		w := c.registerPending(packet.PacketID, epoch)
 		defer c.cancelPending(packet.PacketID)
 
 		if err := c.writePacket(conn, packet); err != nil {
 			return fmt.Errorf("publish %s: %w", topic, err)
 		}
 		select {
-		case <-waiter:
+		case outcome := <-w.outcome:
+			// A nil outcome is a real PUBACK; anything else is a connection
+			// failure or a lost socket. Either way the caller sees the truth.
+			if outcome != nil {
+				return outcome
+			}
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -455,7 +578,9 @@ func (c *Client) Publish(ctx context.Context, topic string, payload []byte, qos 
 
 // writePacket serialises a packet under the write lock and applies the write
 // deadline. Concurrent writers are serialised because MQTT framing is a byte
-// stream: interleaving two packets would corrupt the session.
+// stream: interleaving two packets would corrupt the session. It also records
+// the send time, which is what keeps the keep-alive goroutine from pinging on
+// top of traffic the application is already putting on the wire.
 func (c *Client) writePacket(conn net.Conn, packet *Packet) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -463,10 +588,29 @@ func (c *Client) writePacket(conn net.Conn, packet *Packet) error {
 	if err := conn.SetWriteDeadline(time.Now().Add(DefaultWriteTimeout)); err != nil {
 		return err
 	}
-	return packet.Encode(conn)
+	if err := packet.Encode(conn); err != nil {
+		return err
+	}
+	c.lastSendMu.Lock()
+	c.lastSend = time.Now()
+	c.lastSendMu.Unlock()
+	return nil
+}
+
+// sinceLastSend reports how long it has been since this client last wrote
+// anything to the broker.
+func (c *Client) sinceLastSend() time.Duration {
+	c.lastSendMu.Lock()
+	defer c.lastSendMu.Unlock()
+	return time.Since(c.lastSend)
 }
 
 // setState publishes the current connection.
+//
+// Establishing a connection bumps connEpoch. Any acknowledgement still in flight
+// is then answered as ErrConnectionLost rather than left hanging: a PUBACK from
+// an earlier socket has no bearing on a later one, and a waiter that never
+// resolves is indistinguishable from a hang to its caller.
 func (c *Client) setState(conn net.Conn, connected bool) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
@@ -476,24 +620,28 @@ func (c *Client) setState(conn net.Conn, connected bool) {
 	if connected {
 		c.connEpoch++
 	}
-	// Any in-flight acknowledgement wait belongs to the previous connection.
-	c.pendingMu.Lock()
-	for id, waiter := range c.pending {
-		close(waiter)
-		delete(c.pending, id)
-	}
-	c.pendingMu.Unlock()
 }
 
-// connection returns the live connection or nil.
-func (c *Client) connection() net.Conn {
+// epoch returns the connection epoch currently in flight. It is read after the
+// connection has been published so a publisher and the read loop always agree on
+// which socket the in-flight acknowledgements belong to.
+func (c *Client) epoch() uint64 {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.connEpoch
+}
+
+// connection returns the live connection and its epoch, or false when the
+// session is down. The epoch travels with the connection so a publisher can
+// notice that the socket it wrote to is no longer the one in flight.
+func (c *Client) connection() (net.Conn, uint64, bool) {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 
 	if !c.connected {
-		return nil
+		return nil, 0, false
 	}
-	return c.conn
+	return c.conn, c.connEpoch, true
 }
 
 // allocatePacketID returns the next non-zero packet identifier.
@@ -508,14 +656,16 @@ func (c *Client) allocatePacketID() uint16 {
 	return c.nextID
 }
 
-// registerPending creates the channel a PUBACK will signal.
-func (c *Client) registerPending(id uint16) chan struct{} {
+// registerPending creates the waiter a PUBACK will settle. It is registered with
+// the connection epoch so an acknowledgement arriving later on a different
+// socket is not mistaken for one belonging to this publish.
+func (c *Client) registerPending(id uint16, epoch uint64) *waiter {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
 
-	waiter := make(chan struct{})
-	c.pending[id] = waiter
-	return waiter
+	w := &waiter{epoch: epoch, outcome: make(chan error, 1)}
+	c.pending[id] = w
+	return w
 }
 
 // cancelPending removes a waiter that is no longer needed.
@@ -526,14 +676,36 @@ func (c *Client) cancelPending(id uint16) {
 	delete(c.pending, id)
 }
 
-// completePending signals the goroutine waiting for a PUBACK.
-func (c *Client) completePending(id uint16) {
+// completePending settles the waiter for a matching PUBACK.
+//
+// The epoch is what makes this safe across reconnects: a PUBACK only settles a
+// publish that was written on the same connection. An identifier reused across
+// sessions is a new message, and letting an old acknowledgement settle it would
+// report an unacknowledged command as published.
+func (c *Client) completePending(id uint16, epoch uint64) {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
 
-	if waiter, ok := c.pending[id]; ok {
-		close(waiter)
+	if w, ok := c.pending[id]; ok && w.epoch == epoch {
 		delete(c.pending, id)
+		// Buffered, and closed exactly once by whoever removes it above, so this
+		// send cannot block or panic.
+		w.outcome <- nil
+	}
+}
+
+// failPending ends every in-flight acknowledgement wait with a connection loss.
+//
+// A waiter removed here has no PUBACK to its name, so it must never resolve
+// successfully: the message may have been lost with the socket. Callers see
+// ErrConnectionLost and report the command as unconfirmed.
+func (c *Client) failPending() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+
+	for id, w := range c.pending {
+		delete(c.pending, id)
+		w.outcome <- ErrConnectionLost
 	}
 }
 

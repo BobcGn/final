@@ -378,3 +378,29 @@ bool EnvAlarmHas(uint32_t causes, EnvAlarmCause cause)
 {
     return (causes & (uint32_t)cause) != 0U;
 }
+
+bool EnvMonitorBuzzerDrive(const EnvEvaluation *evaluation, uint32_t tick)
+{
+    uint32_t audible_causes;
+
+    if (evaluation == NULL)
+    {
+        return false;
+    }
+    /* `buzzer_on` is false whenever the device is muted, so the mute is checked
+     * through the evaluation rather than against the monitor: there is then one
+     * place a mute can be lost, and it is the one the mute tests exercise. */
+    if (!evaluation->buzzer_on)
+    {
+        return false;
+    }
+
+    audible_causes = evaluation->alarm_causes &
+                     (uint32_t)(ENV_ALARM_GAS_HIGH | ENV_ALARM_RAPID_GAS_RISE);
+    if (audible_causes == 0U)
+    {
+        return false;
+    }
+
+    return (tick % GAS_BUZZER_PERIOD_TICKS) < GAS_BUZZER_ON_TICKS;
+}

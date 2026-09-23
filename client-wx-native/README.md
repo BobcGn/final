@@ -6,7 +6,7 @@
 
 业务页面已完成并对齐 KMP 方案：包含机房环境总览（dashboard）、历史趋势（trends）、告警记录（alerts）、预警阈值（settings）四个 tab 页。底部导航使用自定义 `custom-tab-bar`，图标位于 `assets/icons/`。
 
-后端除 `GET /healthz` 外所有路由尚未实现（返回 501）。当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（`services/mock/`），Mock 响应字段与新契约一致（`gasPpm` 可为 null、告警证据用 ADC 码、阈值三字段、控制命令生命周期可用）；后端就绪后将 `useMock` 置为 `false` 即可切换真实接口，页面代码无需改动。
+后端全部路由已实现（2026-09-22，见 `backend/README.md`）。当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（`services/mock/`），Mock 响应字段与新契约一致（`gasPpm` 可为 null、告警证据用 ADC 码、阈值三字段、控制命令生命周期可用）；后端就绪后将 `useMock` 置为 `false` 即可切换真实接口，页面代码无需改动。
 
 ## 与 KMP 方案的对齐（重要）
 
@@ -27,8 +27,9 @@
 - **实时策略**：仪表盘每 **3000 ms** 重新取「status + latest」组成一次原子快照，
   只在本页可见时轮询，`onHide`/`onUnload` 立即停止；刷新失败不中断轮询。
   趋势/告警/设置页按需拉取，不参与轮询。
-- **不使用 WebSocket**：KMP 方案不含实时订阅，且后端 `ws/v1` 仍是 501；
-  一旦依赖它，连接失败会把刷新退化到兜底间隔，实时性反而无法保证。
+- **不使用 WebSocket**：KMP 方案不含实时订阅，实时性由 3 秒快照轮询保证；
+  后端 `ws/v1` 已实现，但两端若各用一套推送/轮询会再次出现刷新节奏不一致，
+  因此本端保持与 KMP 相同的轮询模型；如要接入 WS 应作为独立提案，并保留轮询兜底。
 - **控制命令**：入队响应只代表后端已接受，必须轮询 `GET /commands/{requestId}`
   观察设备终态，只有 `applied` 才算成功，超时不得提示成功。
 
@@ -48,8 +49,8 @@ node --test --experimental-test-coverage --test-coverage-include="utils/**" --te
 - 保持微信原生工程方式和真实开发成本，不为了匹配 KMP 目录结构而人为改造。
 - 不依赖 `client-kmp` 的内部实现；跨客户端只共享已确认的外部契约和需求事实。
 - 示数与实时行为必须与 KMP 方案一致；页面不自行格式化数值，也不自行发明刷新策略。
-- ECharts 折线图（趋势页曲线）在后续阶段补齐；后端实现 WebSocket 后如要接入，
-  需作为独立提案并保留 3 秒轮询兜底。
+- 趋势页折线图由 `utils/trend-chart.js` 在 Canvas 2D 上绘制（各指标独立量程、气体缺失分段），
+  数据来自与统计同一批样本；后续如需换成 ECharts 应保持同一数据口径。
 
 
 使用微信开发者工具打开本目录即可运行。`project.config.json` 中已有项目配置与团队确认的 AppID；`project.private.config.json` 等本机私有文件不得提交。

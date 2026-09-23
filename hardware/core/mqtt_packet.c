@@ -371,7 +371,71 @@ uint32_t MqttPacketTotalLength(const uint8_t *data, uint32_t length)
     return 1U + field_size + remaining;
 }
 
-/* Read a length-prefixed byte range at `offset`. */
+MqttScanResult MqttForEachPacket(const uint8_t *data, uint32_t length, MqttVisitor visit,
+                                 void *context)
+{
+    MqttScanResult result;
+    uint32_t offset = 0U;
+
+    result.decoded = 0U;
+    result.undecodable = 0U;
+    result.partial = false;
+
+    if (data == NULL || length == 0U)
+    {
+        return result;
+    }
+
+    while (offset < length)
+    {
+        uint32_t frame_length = MqttPacketTotalLength(&data[offset], length - offset);
+        MqttPacket packet;
+        const char *reason = MQTT_REJECT_MALFORMED;
+
+        if (frame_length == 0U)
+        {
+            /* Fewer than two bytes, or a remaining-length field that has not
+             * arrived in full. The tail is a fragment, and the driver keeps no
+             * partial-frame state to reassemble it with. */
+            result.partial = true;
+            break;
+        }
+        if (frame_length > MQTT_MAX_PACKET_SIZE)
+        {
+            /* A length the device will never accept, so the frame is refused
+             * before its bytes have to be present. */
+            result.undecodable++;
+            break;
+        }
+        if (frame_length > (length - offset))
+        {
+            /* The frame is declared in full but the buffer stops inside it. */
+            result.partial = true;
+            break;
+        }
+
+        if (MqttDecode(&data[offset], frame_length, &packet, &reason))
+        {
+            result.decoded++;
+            if (visit != NULL)
+            {
+                visit(context, &packet);
+            }
+        }
+        else
+        {
+            /* The framing was intact, so whatever follows is still a frame the
+             * caller should get to see. Skipping rather than stopping is what
+             * keeps one packet type the device should not have been sent from
+             * hiding the command queued behind it. */
+            result.undecodable++;
+        }
+
+        offset += frame_length;
+    }
+
+    return result;
+}
 static bool read_bytes(const uint8_t *data, uint32_t length, uint32_t offset,
                        const uint8_t **value, uint16_t *value_length, uint32_t *consumed)
 {

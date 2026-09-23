@@ -4,6 +4,8 @@
 #include "OLED.h"
 #include "adc.h"
 #include "dht11.h"
+#include "control_link.h"
+#include "session_dispatch.h"
 #include "display_model.h"
 #include "env_monitor.h"
 #include "flash_config.h"
@@ -18,6 +20,12 @@
  * from the previous firmware, including the 44-character limit the panel
  * effectively imposed. */
 #define WIFI_MESSAGE_SIZE 64U
+
+/* Control acknowledgement staging. The rendered JSON is a couple of hundred
+ * bytes at its widest — a 32-character requestId, a 16-character bootId and the
+ * longest errorCode — so this leaves generous slack while staying small enough
+ * not to matter on a part with 20 KiB of RAM. */
+#define CONTROL_ACK_SIZE 384U
 
 /* Task cadence, in units of the main loop period.
  *
@@ -34,14 +42,6 @@
 #define UPLINK_PERIOD_TICKS 10U        /* one telemetry frame per second */
 #define MQTT_KEEP_ALIVE_SECONDS 30U
 
-typedef enum
-{
-    MQTT_LINK_TCP = 0U,
-    MQTT_LINK_WAIT_CONNACK,
-    MQTT_LINK_WAIT_SUBACK,
-    MQTT_LINK_ONLINE
-} MqttLinkState;
-
 static void BuildBootId(char bootId[17])
 {
     uint32_t identity = (*(const uint32_t *)0x1FFFF7E8UL) ^
@@ -56,15 +56,10 @@ static uint8_t MqttSend(uint8_t *packet, uint32_t length)
            ESP8266_SendBytes(packet, (uint16_t)length) : 0U;
 }
 
-static uint16_t MqttTakePacketId(uint16_t *next)
+static uint8_t MqttSendWrapper(void *context, const uint8_t *data, uint32_t length)
 {
-    uint16_t current = *next;
-    (*next)++;
-    if (*next == 0U)
-    {
-        *next = 1U;
-    }
-    return current;
+    (void)context;
+    return MqttSend((uint8_t *)data, length);
 }
 
 int main(void)
@@ -78,21 +73,23 @@ int main(void)
     DisplayPage page = DISPLAY_PAGE_CLIMATE;
     DisplayInput display;
     EnvEvaluation evaluation;
+    ControlLink controlLink;
+    SessionDispatcher sessionDispatcher;
+    ESP8266ReceiveStats rxStats;
 
     uint8_t temperature = 0U;
     uint8_t humidity = 0U;
     uint8_t dhtError;
     uint8_t wifiTaskStatus;
     uint8_t buzzerActive = 0U;
-    MqttLinkState mqttState = MQTT_LINK_TCP;
     uint8_t mqttTx[MQTT_MAX_PACKET_SIZE];
     uint8_t mqttRx[MQTT_MAX_PACKET_SIZE];
+    uint8_t controlAck[CONTROL_ACK_SIZE];
     char telemetryJson[512];
     char bootId[17];
     uint16_t mqttRxLength = 0U;
     uint16_t mqttPacketId = 1U;
     uint32_t telemetrySequence = 0U;
-    uint32_t lastMqttActivityMs = 0U;
 
     uint32_t now_ms = 0U;
     uint32_t tick = 0U;
@@ -153,9 +150,12 @@ int main(void)
      * keep alarming on the built-in limits rather than on zeros, which would
      * alarm on every sample.
      *
-     * The write path is driven by the control command handler and is not yet
-     * wired to the radio; see hardware/README.md. Until it is, a device flashed
-     * from this commit always reports no stored configuration. */
+     * The write path is driven by the control command handler in
+     * hardware/core/control_link.c: a set_thresholds command reaches the store
+     * only after the parser has accepted it, and the monitor adopts the new
+     * values only after the store reports the record written and verified. A
+     * device flashed from an empty part therefore still reports no stored
+     * configuration until the first such command arrives. */
     ThresholdStoreInit(&thresholdStore, FlashConfigPort());
     if (!FlashConfigSelfCheck())
     {
@@ -165,6 +165,14 @@ int main(void)
     {
         (void)EnvMonitorSetThresholds(&monitor, &storedThresholds, storedVersion);
     }
+
+    /* The control path is bound to the monitor and the store before either can be
+     * driven from the radio: the mute command acts on the monitor, and a
+     * threshold command is published as applied only after this store has written
+     * and verified the record. */
+    ControlLinkInit(&controlLink, DEVICE_ID, bootId, &monitor, &thresholdStore);
+    SessionDispatchInit(&sessionDispatcher, mqttTx, (uint32_t)sizeof(mqttTx),
+                        &mqttPacketId, &controlLink, MqttSendWrapper, NULL);
 
     dhtError = DHT11_Init();
     (void)dhtError;
@@ -211,11 +219,11 @@ int main(void)
 
         /* Only gas-related causes are audible in this stage. Other causes still
          * drive the LED, OLED and telemetry. The 200 ms / 800 ms cadence avoids
-         * a continuous tone while preserving an unmistakable local warning. */
-        buzzerActive = (uint8_t)(evaluation.buzzer_on &&
-                       ((evaluation.alarm_causes &
-                         (ENV_ALARM_GAS_HIGH | ENV_ALARM_RAPID_GAS_RISE)) != 0U) &&
-                       ((tick % GAS_BUZZER_PERIOD_TICKS) < GAS_BUZZER_ON_TICKS));
+         * a continuous tone while preserving an unmistakable local warning. The
+         * decision itself lives in the monitor so that the audible-cause filter,
+         * the cadence and the mute precedence are covered by the host tests
+         * rather than only by watching a board. */
+        buzzerActive = (uint8_t)(EnvMonitorBuzzerDrive(&evaluation, tick) ? 1U : 0U);
         if (buzzerActive != 0U)
         {
             BEEP_On();
@@ -251,6 +259,12 @@ int main(void)
              * looking at the device should be able to see that its stored
              * configuration area is unusable. */
             (void)thresholdAreaDamaged;
+            /* Likewise for frames the radio could not hand up: a counted loss is
+             * the only on-device evidence that a control command may have been
+             * dropped rather than never sent. */
+            ESP8266_GetReceiveStats(&rxStats);
+            display.rx_discarded = rxStats.discarded_frames;
+            display.rx_truncated = rxStats.truncated_frames;
             display.wifi_ssid = WIFI_SSID;
             display.server_message = wifiMessage;
 
@@ -264,46 +278,46 @@ int main(void)
             OLED_Update();
         }
 
-        /* --- MQTT uplink ---
+        /* --- MQTT downlink ---
          * ESP8266 carries raw MQTT bytes over a single TCP socket. Connection
          * acknowledgement and subscription acknowledgement are required before
          * the OLED reports the network online, preventing the former false
-         * positive where Wi-Fi association alone looked like cloud delivery. */
-        if (ESP8266_GetPacket(mqttRx, sizeof(mqttRx), &mqttRxLength) != 0U)
-        {
-            MqttPacket incoming;
-            const char *rejectReason = 0;
-            if (MqttDecode(mqttRx, mqttRxLength, &incoming, &rejectReason))
-            {
-                if (mqttState == MQTT_LINK_WAIT_CONNACK &&
-                    incoming.type == MQTT_PACKET_CONNACK &&
-                    incoming.return_code == MQTT_CONNACK_ACCEPTED)
-                {
-                    uint32_t length = MqttEncodeSubscribe(mqttTx, sizeof(mqttTx),
-                                                          MqttTakePacketId(&mqttPacketId),
-                                                          "device/control", 1U);
-                    if (MqttSend(mqttTx, length) != 0U)
-                    {
-                        mqttState = MQTT_LINK_WAIT_SUBACK;
-                        lastMqttActivityMs = now_ms;
-                    }
-                }
-                else if (mqttState == MQTT_LINK_WAIT_SUBACK && incoming.type == MQTT_PACKET_SUBACK)
-                {
-                    mqttState = MQTT_LINK_ONLINE;
-                    lastMqttActivityMs = now_ms;
-                }
-                else if (incoming.type == MQTT_PACKET_PINGRESP)
-                {
-                    lastMqttActivityMs = now_ms;
-                }
-            }
-            (void)rejectReason;
-        }
-
+         * positive where Wi-Fi association alone looked like cloud delivery.
+         *
+         * The whole received segment is scanned, not only its first frame: a TCP
+         * segment can carry several MQTT packets, and reading only the head would
+         * drop every command behind the first one without a trace. Every
+         * acknowledgement is built and sent inside the scan, before the driver can
+         * collect another segment into the buffer this one came from. */
+        /* Check TCP connection status first so an offline radio immediately marks
+         * ControlLink offline and drops to MQTT_LINK_TCP without waiting an extra cycle. */
         if (ESP8266_IsTcpConnected() == 0U)
         {
-            mqttState = MQTT_LINK_TCP;
+            SessionDispatchTcpDisconnected(&sessionDispatcher);
+        }
+        else
+        {
+            SessionDispatchSyncOnline(&sessionDispatcher);
+        }
+
+        if (ESP8266_GetPacket(mqttRx, sizeof(mqttRx), &mqttRxLength) != 0U)
+        {
+            sessionDispatcher.now_ms = now_ms;
+            /* The acknowledgement counter is the same boot-scoped counter the
+             * telemetry frames report, so it is seeded here and read back after
+             * the scan: one number space, so the two streams can be ordered
+             * against each other. */
+            ControlLinkSetSequence(&controlLink, telemetrySequence);
+            (void)ControlLinkHandleBuffer(&controlLink, mqttRx, mqttRxLength, now_ms, now_ms,
+                                          controlAck, sizeof(controlAck), SessionDispatchFrame,
+                                          &sessionDispatcher);
+            telemetrySequence = ControlLinkSequence(&controlLink);
+        }
+
+        /* If TCP dropped during packet handling or send, drop to offline immediately. */
+        if (ESP8266_IsTcpConnected() == 0U)
+        {
+            SessionDispatchTcpDisconnected(&sessionDispatcher);
         }
 
         if ((tick % UPLINK_PERIOD_TICKS) == 0U)
@@ -314,17 +328,17 @@ int main(void)
                 wifiTaskStatus = ESP8266_Init();
                 (void)wifiTaskStatus;
             }
-            else if (mqttState == MQTT_LINK_TCP && ESP8266_OpenTcp() != 0U)
+            else if (sessionDispatcher.state == MQTT_LINK_TCP && ESP8266_OpenTcp() != 0U)
             {
                 uint32_t length = MqttEncodeConnect(mqttTx, sizeof(mqttTx), DEVICE_ID,
                                                     MQTT_KEEP_ALIVE_SECONDS, "device", 0);
                 if (MqttSend(mqttTx, length) != 0U)
                 {
-                    mqttState = MQTT_LINK_WAIT_CONNACK;
-                    lastMqttActivityMs = now_ms;
+                    sessionDispatcher.state = MQTT_LINK_WAIT_CONNACK;
+                    sessionDispatcher.last_activity_ms = now_ms;
                 }
             }
-            else if (mqttState == MQTT_LINK_ONLINE)
+            else if (sessionDispatcher.state == MQTT_LINK_ONLINE)
             {
                 TelemetryPayload telemetry;
                 uint32_t jsonLength;
@@ -348,25 +362,25 @@ int main(void)
                 telemetry.sensor_fault = ((evaluation.alarm_causes & ENV_ALARM_SENSOR_FAULT) != 0U);
                 jsonLength = TelemetryJsonEncode(&telemetry, telemetryJson, sizeof(telemetryJson));
                 packetLength = MqttEncodePublish(mqttTx, sizeof(mqttTx), "device/telemetry",
-                                                 MqttTakePacketId(&mqttPacketId), 1U,
+                                                 SessionTakePacketId(&mqttPacketId), 1U,
                                                  (const uint8_t *)telemetryJson, jsonLength);
                 if (jsonLength > 0U && MqttSend(mqttTx, packetLength) != 0U)
                 {
                     telemetrySequence++;
-                    lastMqttActivityMs = now_ms;
+                    sessionDispatcher.last_activity_ms = now_ms;
                 }
             }
-            display.network = (mqttState == MQTT_LINK_ONLINE) ?
+            display.network = (sessionDispatcher.state == MQTT_LINK_ONLINE) ?
                               DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_LINKING;
         }
 
-        if (mqttState == MQTT_LINK_ONLINE &&
-            (now_ms - lastMqttActivityMs) >= (MQTT_KEEP_ALIVE_SECONDS * 500U))
+        if (sessionDispatcher.state == MQTT_LINK_ONLINE &&
+            (now_ms - sessionDispatcher.last_activity_ms) >= (MQTT_KEEP_ALIVE_SECONDS * 500U))
         {
             uint32_t length = MqttEncodePingReq(mqttTx, sizeof(mqttTx));
             if (MqttSend(mqttTx, length) != 0U)
             {
-                lastMqttActivityMs = now_ms;
+                sessionDispatcher.last_activity_ms = now_ms;
             }
         }
 
