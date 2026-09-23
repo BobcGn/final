@@ -18,50 +18,51 @@
     >{{item.label}}</view>
   </view>
 
-  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
-  <view class="hint" wx:if="{{error}}">{{error}}</view>
+  <view class="hint" wx:if="{{loading && !alertsView}}">数据加载中...</view>
+  <view class="hint value-red" wx:if="{{error}}">{{error}}</view>
 
   <!-- 空状态 -->
-  <view class="empty" wx:if="{{!loading && !error && shown.length === 0}}">
+  <view class="empty" wx:if="{{!loading && !error && alertsView && alertsView.visibleCount === 0}}">
     <view class="empty-icon">🛡</view>
     <view class="empty-text">该分类下暂无告警记录</view>
   </view>
 
   <!-- ============ 告警卡片 ============ -->
-  <view class="alert-card" wx:for="{{shown}}" wx:key="id">
-    <view class="alert-head">
-      <view class="alert-left">
-        <view class="alert-dot dot-{{item.state}}"></view>
-        <text class="tag {{item.stateMeta.tag}}">{{item.stateMeta.text}}</text>
+  <block wx:if="{{alertsView && alertsView.visibleCount > 0}}">
+    <view class="alert-card" wx:for="{{alertsView.items}}" wx:key="id">
+      <view class="alert-head">
+        <view class="alert-left">
+          <view class="alert-dot dot-{{item.state}}"></view>
+          <text class="tag tag-{{item.tone === 'danger' ? 'red' : (item.tone === 'warning' ? 'amber' : (item.tone === 'info' ? 'blue' : 'green'))}}">{{item.stateText}}</text>
+        </view>
+        <text class="alert-time">{{item.startedAt}}</text>
       </view>
-      <text class="alert-time">{{item.startedText}}</text>
-    </view>
 
-    <view class="evidence">
-      <view class="evidence-head">触发证据</view>
-      <view class="evidence-grid">
-        <view class="evidence-cell">
-          <text class="cell-label">气体上升</text>
-          <text class="cell-value">{{item.evidence.gasRise}}<text class="cell-unit">ppm</text></text>
-        </view>
-        <view class="evidence-cell">
-          <text class="cell-label">触发阈值</text>
-          <text class="cell-value">{{item.evidence.gasRiseThreshold}}<text class="cell-unit">ppm</text></text>
-        </view>
-        <view class="evidence-cell">
-          <text class="cell-label">温升速率</text>
-          <text class="cell-value">{{item.evidence.temperatureRateCPerMinute}}<text class="cell-unit">°C/min</text></text>
-        </view>
-        <view class="evidence-cell">
-          <text class="cell-label">样本数</text>
-          <text class="cell-value">{{item.evidence.sampleCount}}</text>
+      <view class="evidence">
+        <view class="evidence-head">触发证据</view>
+        <view class="evidence-grid">
+          <view class="evidence-cell">
+            <text class="cell-label">气体 ADC 上升</text>
+            <text class="cell-value">{{item.gasAdcRiseText}}</text>
+          </view>
+          <view class="evidence-cell">
+            <text class="cell-label">触发阈值</text>
+            <text class="cell-value">{{item.gasAdcRiseThresholdText}}</text>
+          </view>
+          <view class="evidence-cell">
+            <text class="cell-label">温升速率</text>
+            <text class="cell-value">{{item.temperatureRateText}}</text>
+          </view>
+          <view class="evidence-cell">
+            <text class="cell-label">样本数</text>
+            <text class="cell-value">{{item.sampleCountText}}</text>
+          </view>
         </view>
       </view>
-    </view>
 
-    <view class="alert-foot" wx:if="{{item.ackText || item.endedText}}">
-      <text wx:if="{{item.ackText}}">已确认 {{item.ackText}}</text>
-      <text wx:if="{{item.endedText}}">已恢复 {{item.endedText}}</text>
+      <view class="alert-foot" wx:if="{{!item.active}}">
+        <text>已恢复 {{item.endedAt}}</text>
+      </view>
     </view>
-  </view>
+  </block>
 </view>

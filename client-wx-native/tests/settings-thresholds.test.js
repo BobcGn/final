@@ -21,17 +21,46 @@ test('settings preserves the server humidity limit when saving two visible slide
       submitted = payload
       return { desiredVersion: 4 }
     },
+    getCommandStatus: async () => ({
+      requestId: 'test-req',
+      state: 'applied',
+    }),
+  }
+  const monitoring = {
+    loadSettings: async () => {
+      const t = await device.getThresholds()
+      return {
+        temperatureHighC: t.temperatureHighC,
+        humidityHighRh: t.humidityHighRh,
+        gasHighPpm: t.gasHighPpm,
+        desiredVersion: t.desiredVersion,
+        confirmedVersion: t.confirmedVersion,
+        confirmationState: t.confirmationState,
+        confirmationText: '设备已确认',
+        confirmationTone: 'mint',
+      }
+    },
+    updateThresholds: async (_deviceId, payload) => {
+      submitted = payload
+      return { requestId: 'test-req', stateText: '等待设备确认', tone: 'warning' }
+    },
+    awaitCommandOutcome: async () => ({
+      requestId: 'test-req',
+      stateText: '设备已确认',
+      tone: 'mint',
+      confirmed: true,
+    }),
   }
   const dependencies = {
+    '../../services/monitoring.js': monitoring,
     '../../services/device.js': device,
-    '../../services/socket.js': {},
     '../../utils/helpers.js': { formatRfc3339: (value) => value },
   }
   const source = fs.readFileSync(path.join(__dirname, '../pages/settings/settings.js'), 'utf8')
   vm.runInNewContext(source, {
     require: (id) => dependencies[id],
     Page: (definition) => { page = definition },
-    wx: { showToast: () => {} },
+    wx: { showToast: () => {}, showLoading: () => {}, hideLoading: () => {} },
     setTimeout: () => {},
   })
   page.data = { ...page.data }

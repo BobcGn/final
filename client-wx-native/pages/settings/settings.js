@@ -1,36 +1,27 @@
 /**
- * 阈值设置页。
+ * 预警阈值设置页。
  *
- * 数据源：GET/PUT /api/v1/devices/{id}/thresholds。
- * 契约要点：
- * - temperatureHighC 范围 0-80 °C，gasHighPpm 范围 1-999 ppm；
- * - PUT 返回 202 只表示后端接受命令，设备确认后 confirmationState 才变 confirmed；
- * - 期望版本(desiredVersion)与设备确认版本(confirmedVersion)不一致说明命令还在途中。
+ * 与 client-kmp 严格对齐：
+ * 1. 契约要求下发三项完整阈值（temperatureHighC / humidityHighRh / gasHighPpm）；
+ * 2. 湿度不可编辑但在保存时保持回传，杜绝丢失；
+ * 3. 温度与气体步长为 1（固件按整数摄氏度执行）；
+ * 4. 下发前执行本地范围校验，提示文案完全一致；
+ * 5. 下发 202 仅代表在途，通过轮询 GET /commands/{requestId} 等待设备 applied 终态；
+ * 6. 移除 WebSocket thresholds.confirmed 依赖。
  */
-const deviceService = require('../../services/device.js')
-const socket = require('../../services/socket.js')
-const { formatRfc3339 } = require('../../utils/helpers.js')
-
-/** 设备确认状态文案（契约 §8：confirmed | pending | rejected | timed_out） */
-const CONFIRM_TEXT = {
-  confirmed: '设备已确认',
-  pending: '等待设备确认',
-  rejected: '设备已拒绝',
-  timed_out: '确认超时，请重试',
-}
+const monitoring = require('../../services/monitoring.js')
 
 Page({
   data: {
-    loading: true,
+    settings: null,
     temperatureHighC: 30,
     humidityHighRh: 80,
-    gasHighPpm: 80,
-    desiredVersion: 0,
-    confirmedVersion: 0,
-    confirmationState: 'confirmed',
-    confirmText: '',
-    updatedAt: '',
+    gasHighPpm: 20,
+    loading: true,
+    error: '',
     saving: false,
+    commandHint: '',
+    commandTone: 'warning',
   },
 
   onShow() {
@@ -38,104 +29,81 @@ Page({
       this.getTabBar().setData({ selected: 3 })
     }
     this.fetch()
-    this.subscribeStream()
   },
 
-  onHide() {
-    this.unsubscribeStream()
+  async onPullDownRefresh() {
+    await this.fetch()
+    wx.stopPullDownRefresh()
   },
 
-  onUnload() {
-    this.unsubscribeStream()
-  },
-
-  /**
-   * 订阅阈值确认事件：契约 §10 用 thresholds.confirmed / command.status_changed
-   * 通知设备已写入 Flash，比定时轮询更准（不再依赖 setTimeout 猜测）。
-   */
-  subscribeStream() {
-    if (this._offs) return
-    socket.connect('MCU001', { onResync: () => this.fetch() })
-    this._offs = [
-      socket.on('thresholds.confirmed', () => this.fetch()),
-      socket.on('command.status_changed', () => this.fetch()),
-    ]
-  },
-
-  unsubscribeStream() {
-    if (this._offs) {
-      this._offs.forEach((off) => off())
-      this._offs = null
-    }
-  },
-
-  /** 拉取当前阈值与版本信息 */
   async fetch() {
+    this.setData({ loading: true })
     try {
-      const t = await deviceService.getThresholds('MCU001')
+      const view = await monitoring.loadSettings('MCU001')
       this.setData({
+        settings: view,
+        temperatureHighC: view.temperatureHighC,
+        humidityHighRh: view.humidityHighRh,
+        gasHighPpm: view.gasHighPpm,
         loading: false,
-        temperatureHighC: t.temperatureHighC,
-        humidityHighRh: t.humidityHighRh,
-        gasHighPpm: t.gasHighPpm,
-        desiredVersion: t.desiredVersion,
-        confirmedVersion: t.confirmedVersion,
-        confirmationState: t.confirmationState,
-        confirmText: CONFIRM_TEXT[t.confirmationState] || t.confirmationState,
-        updatedAt: formatRfc3339(t.updatedAt),
+        error: '',
       })
     } catch (e) {
-      this.setData({ loading: false })
-      wx.showToast({ title: (e && e.message) || '加载失败', icon: 'none' })
+      this.setData({ loading: false, error: (e && e.message) || '数据加载失败' })
     }
+  },
+
+  async loadSettings() {
+    return this.fetch()
   },
 
   onTempChange(e) {
     this.setData({ temperatureHighC: e.detail.value })
   },
+  onTemp(e) {
+    this.onTempChange(e)
+  },
 
   onGasChange(e) {
     this.setData({ gasHighPpm: e.detail.value })
   },
+  onGas(e) {
+    this.onGasChange(e)
+  },
 
-  /**
-   * 保存并下发。客户端先做范围校验减少无效请求，
-   * 服务端仍会以 422 invalid_threshold 兜底。
-   */
   async onSave() {
     if (this.data.saving) return
-    const { temperatureHighC, humidityHighRh, gasHighPpm } = this.data
-    if (temperatureHighC < 0 || temperatureHighC > 80) {
-      wx.showToast({ title: '温度阈值需在 0-80 °C', icon: 'none' })
-      return
+    this.setData({ saving: true, commandHint: '' })
+    if (typeof wx !== 'undefined' && wx.showLoading) {
+      wx.showLoading({ title: '下发中', mask: true })
     }
-    if (gasHighPpm < 1 || gasHighPpm > 999) {
-      wx.showToast({ title: '气体阈值需在 1-999 ppm', icon: 'none' })
-      return
-    }
-    this.setData({ saving: true })
     try {
-      const res = await deviceService.putThresholds('MCU001', {
-        temperatureHighC: Number(temperatureHighC),
-        // The backend requires the complete threshold set even though this page
-        // currently exposes only temperature and gas sliders.
-        humidityHighRh: Number(humidityHighRh),
-        gasHighPpm: Number(gasHighPpm),
+      const accepted = await monitoring.updateThresholds('MCU001', {
+        temperatureHighC: Number(this.data.temperatureHighC),
+        humidityHighRh: Number(this.data.humidityHighRh),
+        gasHighPpm: Number(this.data.gasHighPpm),
       })
+      this.setData({ commandHint: accepted.stateText, commandTone: accepted.tone })
+      const outcome = await monitoring.awaitCommandOutcome('MCU001', accepted.requestId)
       this.setData({
-        desiredVersion: res.desiredVersion,
-        confirmationState: 'pending',
-        confirmText: CONFIRM_TEXT.pending,
+        commandHint: outcome ? outcome.stateText : '等待设备确认',
+        commandTone: outcome ? outcome.tone : 'warning',
       })
-      wx.showToast({ title: '已下发，等待设备确认', icon: 'none' })
-      // 设备确认由 WebSocket thresholds.confirmed 事件驱动；
-      // 这里保留一次延迟兜底，防止事件丢失导致状态长时间停留在 pending
-      setTimeout(() => {
-        if (this.data.confirmationState === 'pending') this.fetch()
-      }, 8000)
+      if (typeof wx !== 'undefined' && wx.showToast) {
+        wx.showToast({
+          title: outcome ? outcome.stateText : '等待设备确认',
+          icon: outcome && outcome.confirmed ? 'success' : 'none',
+        })
+      }
+      await this.fetch()
     } catch (e) {
-      wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
+      if (typeof wx !== 'undefined' && wx.showToast) {
+        wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
+      }
     } finally {
+      if (typeof wx !== 'undefined' && wx.hideLoading) {
+        wx.hideLoading()
+      }
       this.setData({ saving: false })
     }
   },

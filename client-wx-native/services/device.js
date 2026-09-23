@@ -57,11 +57,20 @@ function putThresholds(deviceId, payload) {
   })
 }
 
+/**
+ * 查询命令生命周期：GET /api/v1/devices/{id}/commands/{requestId}
+ */
+function getCommandStatus(deviceId, requestId) {
+  return call('/api/v1/devices/' + deviceId + '/commands/' + requestId)
+}
+
 module.exports = {
+  call,
   getStatus,
   getLatestTelemetry,
   getTelemetryHistory,
   getAlerts,
   getThresholds,
   putThresholds,
+  getCommandStatus,
 }
