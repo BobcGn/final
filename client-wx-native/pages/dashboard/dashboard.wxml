@@ -77,33 +77,9 @@
         <text class="cell-value {{latest.localAlarm ? 'value-red' : 'value-green'}}">{{latest.localAlarm ? '报警中' : '正常'}}</text>
       </view>
       <view class="device-cell">
-        <text class="cell-label">声光提示</text>
-        <text class="cell-value {{latest.buzzerMuted ? 'value-amber' : ''}}">{{latest.buzzerMuted ? '已静音' : '鸣叫中'}}</text>
-      </view>
-      <view class="device-cell">
         <text class="cell-label">更新时间</text>
         <text class="cell-value">{{updatedAt}}</text>
       </view>
-    </view>
-  </view>
-
-  <!-- ============ 远程控制 ============ -->
-  <view class="section-head">
-    <view class="section-title">远程控制</view>
-    <view class="section-tip">设备在线时可用</view>
-  </view>
-
-  <view class="card" wx:if="{{latest}}">
-    <view class="mute-row">
-      <view class="mute-info">
-        <view class="mute-title">蜂鸣器控制</view>
-        <view class="mute-desc">静音不影响环境检测与告警上报</view>
-      </view>
-      <button
-        class="btn {{latest.buzzerMuted ? 'btn-outline' : 'btn-primary'}} mute-btn"
-        bindtap="onMuteTap"
-        loading="{{muting}}"
-      >{{latest.buzzerMuted ? '恢复鸣叫' : '远程静音'}}</button>
     </view>
   </view>
 

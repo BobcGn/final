@@ -13,7 +13,7 @@
 - 后续与 KMP 客户端实现相同业务能力，并使用相同 Backend API、硬件数据源和验收场景。
 - 保持微信原生工程方式和真实开发成本，不为了匹配 KMP 目录结构而人为改造。
 - 不依赖 `client-kmp` 的内部实现；跨客户端只共享已确认的外部契约和需求事实。
-- WebSocket 实时订阅已实现（`services/socket.js`：Envelope 解析、eventId 去重、断线重连与 REST 兜底）；ECharts 折线图与单元测试在后续阶段补齐。
+- WebSocket 实时订阅已实现（`services/socket.js`：Envelope 解析、eventId 去重、断线重连与 REST 兜底）；趋势页使用原生 Canvas 2D 折线图，相关几何与异步竞态由 `node --test tests/*.test.js` 验证，开发者工具视觉验收仍需单独进行。
 
 使用微信开发者工具打开本目录即可运行。`project.config.json` 中已有项目配置与团队确认的 AppID；`project.private.config.json` 等本机私有文件不得提交。
 

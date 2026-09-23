@@ -116,8 +116,67 @@ static uint8_t mock_io_send(void *context, const uint8_t *data, uint32_t length)
 /* Test Fixture                                                        */
 /* ------------------------------------------------------------------ */
 
+/* RAM-backed Flash for the threshold store. A threshold command is only
+ * reported applied after the store has written and verified a record, so a
+ * fixture without a working port would report failed and never exercise the
+ * session transition this suite is about. */
 typedef struct
 {
+    uint8_t memory[THRESHOLD_RECORD_SLOT_SIZE * THRESHOLD_RECORD_SLOTS];
+} SessionFlash;
+
+static bool session_flash_read(void *context, uint32_t offset, uint8_t *out, uint32_t length)
+{
+    SessionFlash *flash = (SessionFlash *)context;
+    uint32_t index;
+
+    if (offset + length > sizeof(flash->memory))
+    {
+        return false;
+    }
+    for (index = 0U; index < length; index++)
+    {
+        out[index] = flash->memory[offset + index];
+    }
+    return true;
+}
+
+static bool session_flash_erase(void *context, uint32_t offset)
+{
+    SessionFlash *flash = (SessionFlash *)context;
+    uint32_t index;
+
+    if (offset + THRESHOLD_RECORD_SLOT_SIZE > sizeof(flash->memory))
+    {
+        return false;
+    }
+    for (index = 0U; index < THRESHOLD_RECORD_SLOT_SIZE; index++)
+    {
+        flash->memory[offset + index] = 0xFFU;
+    }
+    return true;
+}
+
+static bool session_flash_write(void *context, uint32_t offset, const uint8_t *data, uint32_t length)
+{
+    SessionFlash *flash = (SessionFlash *)context;
+    uint32_t index;
+
+    if (offset + length > sizeof(flash->memory))
+    {
+        return false;
+    }
+    for (index = 0U; index < length; index++)
+    {
+        flash->memory[offset + index] = data[index];
+    }
+    return true;
+}
+
+typedef struct
+{
+    SessionFlash flash;
+    ThresholdFlashPort port;
     EnvMonitor monitor;
     ThresholdStore store;
     ControlLink link;
@@ -130,8 +189,21 @@ typedef struct
 
 static void fixture_setup(SessionFixture *fix)
 {
+    uint32_t index;
+
+    for (index = 0U; index < sizeof(fix->flash.memory); index++)
+    {
+        fix->flash.memory[index] = 0xFFU;
+    }
+    fix->port.read = session_flash_read;
+    fix->port.erase = session_flash_erase;
+    fix->port.write = session_flash_write;
+    fix->port.slot_offset[0] = 0U;
+    fix->port.slot_offset[1] = THRESHOLD_RECORD_SLOT_SIZE;
+    fix->port.context = &fix->flash;
+
     EnvMonitorInit(&fix->monitor);
-    ThresholdStoreInit(&fix->store, NULL);
+    ThresholdStoreInit(&fix->store, &fix->port);
     ControlLinkInit(&fix->link, "MCU001", "9f3ac21b", &fix->monitor, &fix->store);
     mock_io_reset(&fix->mock_io);
     fix->packet_id = 1U;
@@ -139,14 +211,19 @@ static void fixture_setup(SessionFixture *fix)
                         &fix->packet_id, &fix->link, mock_io_send, &fix->mock_io);
 }
 
-static void build_mute_json(char *out, uint32_t capacity, const char *request_id, bool muted)
+/* A control command whose only job is to be an identifiable side effect: a
+ * threshold update that must move the monitor's threshold version if, and
+ * only if, the session state machine actually let it execute. */
+static void build_thresholds_json(char *out, uint32_t capacity, const char *request_id,
+                                  uint32_t version)
 {
     (void)snprintf(out, capacity,
                    "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
                    "\"requestId\":\"%s\",\"issuedAt\":1790246400000,"
-                   "\"expiresAt\":1790246460000,\"type\":\"set_mute\","
-                   "\"payload\":{\"muted\":%s}}",
-                   request_id, muted ? "true" : "false");
+                   "\"expiresAt\":1790246460000,\"type\":\"set_thresholds\","
+                   "\"payload\":{\"thresholdVersion\":%u,"
+                   "\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":20}}",
+                   request_id, version);
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,8 +254,8 @@ static void test_suback_and_publish_same_buffer(void)
     frame[4] = 1U; /* Granted QoS 1 */
     suback_len = 5U;
 
-    /* Frame 2: QoS 1 PUBLISH to device/control with mute=true */
-    build_mute_json(json, sizeof(json), "REQ-SUBACK-CO-BUF", true);
+    /* Frame 2: QoS 1 PUBLISH to device/control with a threshold command */
+    build_thresholds_json(json, sizeof(json), "REQ-SUBACK-CO-BUF", 2U);
     pub_len = MqttEncodePublish(&frame[suback_len], sizeof(frame) - suback_len,
                                 CONTROL_TOPIC_COMMAND, 101U, 1U,
                                 (const uint8_t *)json, (uint32_t)strlen(json));
@@ -197,7 +274,7 @@ static void test_suback_and_publish_same_buffer(void)
     /* 2. Command must be executed as applied, NOT offline */
     CHECK_INT(1U, fix.link.counters.applied);
     CHECK_INT(0U, fix.link.counters.offline_frames);
-    CHECK_TRUE(EnvMonitorMuted(&fix.monitor));
+    CHECK_INT(2U, EnvMonitorThresholdVersion(&fix.monitor));
 
     /* 3. Wire outputs: PUBACK sent for QoS 1 PUBLISH, command ACK published */
     CHECK_INT(1U, fix.mock_io.puback_count);
@@ -231,7 +308,7 @@ static void test_suback_failure_and_mismatch(void)
     suback_len = 5U;
 
     /* Frame 2: control PUBLISH */
-    build_mute_json(json, sizeof(json), "REQ-FAIL-SUBACK", true);
+    build_thresholds_json(json, sizeof(json), "REQ-FAIL-SUBACK", 2U);
     pub_len = MqttEncodePublish(&frame[suback_len], sizeof(frame) - suback_len,
                                 CONTROL_TOPIC_COMMAND, 102U, 1U,
                                 (const uint8_t *)json, (uint32_t)strlen(json));
@@ -245,7 +322,7 @@ static void test_suback_failure_and_mismatch(void)
     CHECK_FALSE(fix.link.online);
     CHECK_INT(0U, fix.link.counters.applied);
     CHECK_INT(1U, fix.link.counters.offline_frames);
-    CHECK_FALSE(EnvMonitorMuted(&fix.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fix.monitor));
 
     /* PUBACK is sent to fulfill transport delivery, but NO command ACK is published */
     CHECK_INT(1U, fix.mock_io.puback_count);
@@ -266,7 +343,7 @@ static void test_suback_failure_and_mismatch(void)
     frame[4] = 1U;
     suback_len = 5U;
 
-    build_mute_json(json, sizeof(json), "REQ-MISMATCH-ID", true);
+    build_thresholds_json(json, sizeof(json), "REQ-MISMATCH-ID", 2U);
     pub_len = MqttEncodePublish(&frame[suback_len], sizeof(frame) - suback_len,
                                 CONTROL_TOPIC_COMMAND, 103U, 1U,
                                 (const uint8_t *)json, (uint32_t)strlen(json));
@@ -279,7 +356,7 @@ static void test_suback_failure_and_mismatch(void)
     CHECK_FALSE(fix.link.online);
     CHECK_INT(0U, fix.link.counters.applied);
     CHECK_INT(1U, fix.link.counters.offline_frames);
-    CHECK_FALSE(EnvMonitorMuted(&fix.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fix.monitor));
 
     TEST_CASE("a SUBACK arriving in unexpected state does not alter session");
     fixture_setup(&fix);
@@ -316,7 +393,7 @@ static void test_tcp_disconnect_behavior(void)
     CHECK_INT(0U, fix.dispatcher.pending_sub_packet_id);
 
     /* A buffered PUBLISH arriving after disconnect must not execute */
-    build_mute_json(json, sizeof(json), "REQ-AFTER-DISC", true);
+    build_thresholds_json(json, sizeof(json), "REQ-AFTER-DISC", 2U);
     pub_len = MqttEncodePublish(frame, sizeof(frame), CONTROL_TOPIC_COMMAND, 201U, 1U,
                                 (const uint8_t *)json, (uint32_t)strlen(json));
     CHECK_TRUE(pub_len > 0U);
@@ -327,7 +404,7 @@ static void test_tcp_disconnect_behavior(void)
 
     CHECK_INT(1U, fix.link.counters.offline_frames);
     CHECK_INT(0U, fix.link.counters.applied);
-    CHECK_FALSE(EnvMonitorMuted(&fix.monitor));
+    CHECK_INT(1U, EnvMonitorThresholdVersion(&fix.monitor));
     CHECK_INT(0U, fix.mock_io.pub_count);
 
     TEST_CASE("SessionDispatchSyncOnline keeps ControlLink updated");
@@ -427,6 +504,37 @@ static void test_error_and_send_failures(void)
     CHECK_FALSE(SessionDispatchFrame(&fix.dispatcher, &packet, &outcome, (const uint8_t *)"hello"));
 }
 
+static void test_broker_silence_requires_reconnect(void)
+{
+    SessionFixture fix;
+
+    TEST_CASE("offline link never triggers a forced TCP reconnect");
+    fixture_setup(&fix);
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 60000U));
+    CHECK_FALSE(SessionDispatchNeedsReconnect(NULL, 60000U));
+
+    TEST_CASE("CONNECT and SUBSCRIBE handshakes time out at ten seconds");
+    fix.dispatcher.state = MQTT_LINK_WAIT_CONNACK;
+    fix.dispatcher.last_rx_ms = 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 10999U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 11000U));
+    fix.dispatcher.state = MQTT_LINK_WAIT_SUBACK;
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 11000U));
+
+    TEST_CASE("online link requires a broker frame within forty-five seconds");
+    fix.dispatcher.state = MQTT_LINK_ONLINE;
+    fix.dispatcher.last_rx_ms = 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 45999U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 46000U));
+    fix.dispatcher.last_rx_ms = 45500U; /* PUBACK or PINGRESP received */
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 46000U));
+
+    TEST_CASE("timeout comparison remains valid across millisecond counter wrap");
+    fix.dispatcher.last_rx_ms = UINT32_MAX - 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 43998U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 43999U));
+}
+
 /* Entry point for the session_dispatch suite. */
 void test_session_dispatch_suite(void)
 {
@@ -435,4 +543,5 @@ void test_session_dispatch_suite(void)
     test_tcp_disconnect_behavior();
     test_connack_and_pingresp();
     test_error_and_send_failures();
+    test_broker_silence_requires_reconnect();
 }

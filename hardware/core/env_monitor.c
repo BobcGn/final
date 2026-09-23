@@ -114,7 +114,6 @@ void EnvMonitorInit(EnvMonitor *monitor)
     monitor->sensor_fault = false;
 
     monitor->previous_causes = ENV_ALARM_NONE;
-    monitor->muted = false;
     monitor->threshold_version = ENV_INITIAL_THRESHOLD_VERSION;
 }
 
@@ -171,17 +170,11 @@ bool EnvMonitorSetThresholds(EnvMonitor *monitor, const EnvThresholds *threshold
 
     monitor->thresholds = *thresholds;
     monitor->threshold_version = version;
+    /* Updating thresholds establishes a new baseline for alarm evaluation.
+     * Clear previous causes so that if the current environment violates the
+     * newly configured limits, the alarm is evaluated fresh as a new cause. */
+    monitor->previous_causes = ENV_ALARM_NONE;
     return true;
-}
-
-void EnvMonitorSetMuted(EnvMonitor *monitor, bool muted)
-{
-    monitor->muted = muted;
-}
-
-bool EnvMonitorMuted(const EnvMonitor *monitor)
-{
-    return monitor->muted;
 }
 
 uint32_t EnvMonitorThresholdVersion(const EnvMonitor *monitor)
@@ -350,27 +343,16 @@ EnvEvaluation EnvMonitorEvaluate(EnvMonitor *monitor, uint32_t now_ms)
         }
     }
 
-    /* A cause that was not present before is a new event, and a new event
-     * cancels a previous mute so that the buzzer sounds. Without this rule a
-     * mute issued for one episode would silently suppress the next one, which is
-     * the failure mode that makes remote mute dangerous.
-     *
-     * docs/implementation-plan.md §4.3 records this as a product rule that needs
-     * confirmation; it is implemented fail-safe — towards sounding — until then. */
+    /* A cause that was not present before is a new event. */
     result.new_cause = (causes & ~monitor->previous_causes) != 0U;
-    if (result.new_cause)
-    {
-        monitor->muted = false;
-    }
     monitor->previous_causes = causes;
 
     result.alarm_causes = causes;
     result.local_alarm = causes != ENV_ALARM_NONE;
 
-    /* The buzzer is the only thing mute affects. The LED, the OLED indication
-     * and the telemetry flag all follow local_alarm, because a mute that also
-     * hid the alarm would remove the operator's ability to see it locally. */
-    result.buzzer_on = result.local_alarm && !monitor->muted;
+    /* The buzzer is driven solely by the device's own gas-alarm logic.
+     * No remote command can silence it. */
+    result.buzzer_on = result.local_alarm;
     return result;
 }
 
@@ -387,9 +369,8 @@ bool EnvMonitorBuzzerDrive(const EnvEvaluation *evaluation, uint32_t tick)
     {
         return false;
     }
-    /* `buzzer_on` is false whenever the device is muted, so the mute is checked
-     * through the evaluation rather than against the monitor: there is then one
-     * place a mute can be lost, and it is the one the mute tests exercise. */
+    /* `buzzer_on` is true whenever a gas alarm is active. The cadence is
+     * applied separately. */
     if (!evaluation->buzzer_on)
     {
         return false;

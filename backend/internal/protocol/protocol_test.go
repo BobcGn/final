@@ -49,7 +49,6 @@ func TestDecodeTelemetryAcceptsTheContractExample(t *testing.T) {
 		"gasCalibrated": false,
 		"localAlarm": true,
 		"alarmCauses": ["gas_high"],
-		"buzzerMuted": false,
 		"network": "online",
 		"thresholdVersion": 3,
 		"sensorFault": false
@@ -68,8 +67,8 @@ func TestDecodeTelemetryAcceptsTheContractExample(t *testing.T) {
 	if sample.GasAdcRaw != 1350 || sample.GasAdcFiltered != 1328 {
 		t.Fatalf("gas ADC decoded as raw %d filtered %d", sample.GasAdcRaw, sample.GasAdcFiltered)
 	}
-	if !sample.LocalAlarm || sample.BuzzerMuted {
-		t.Fatalf("alarm flags decoded as localAlarm %v buzzerMuted %v", sample.LocalAlarm, sample.BuzzerMuted)
+	if !sample.LocalAlarm {
+		t.Fatalf("localAlarm decoded as %v", sample.LocalAlarm)
 	}
 	if len(sample.AlarmCauses) != 1 || sample.AlarmCauses[0] != domain.AlarmGasHigh {
 		t.Fatalf("alarm causes decoded as %v", sample.AlarmCauses)
@@ -400,18 +399,12 @@ func TestDecodeCommandAckRejections(t *testing.T) {
 }
 
 // TestControlRoundTrip verifies that the backend's control encoder produces a
-// payload the documented device-side decoder accepts, for both command types.
+// payload the documented device-side decoder accepts.
 func TestControlRoundTrip(t *testing.T) {
-	muted := true
 	version := 4
 	thresholds := domain.Thresholds{TemperatureHighC: 30, HumidityHighRh: 80, GasHighPpm: 80}
 
 	cases := map[string]domain.Command{
-		"set_mute": {
-			RequestID: "01REQ1", DeviceID: "MCU001", Type: domain.CommandSetMute,
-			State: domain.CommandAccepted, Payload: domain.CommandPayload{Muted: &muted},
-			AcceptedAt: receivedAt, ExpiresAt: receivedAt.Add(time.Minute),
-		},
 		"set_thresholds": {
 			RequestID: "01REQ2", DeviceID: "MCU001", Type: domain.CommandSetThresholds,
 			State: domain.CommandAccepted,
@@ -438,15 +431,8 @@ func TestControlRoundTrip(t *testing.T) {
 			if !decoded.ExpiresAt.Equal(command.ExpiresAt) {
 				t.Fatalf("expiresAt changed from %s to %s", command.ExpiresAt, decoded.ExpiresAt)
 			}
-			switch command.Type {
-			case domain.CommandSetMute:
-				if decoded.Payload.Muted == nil || *decoded.Payload.Muted != muted {
-					t.Fatalf("muted decoded as %v", decoded.Payload.Muted)
-				}
-			case domain.CommandSetThresholds:
-				if decoded.Payload.Thresholds == nil || !decoded.Payload.Thresholds.Equal(thresholds) {
-					t.Fatalf("thresholds decoded as %+v", decoded.Payload.Thresholds)
-				}
+			if decoded.Payload.Thresholds == nil || !decoded.Payload.Thresholds.Equal(thresholds) {
+				t.Fatalf("thresholds decoded as %+v", decoded.Payload.Thresholds)
 			}
 		})
 	}
@@ -459,10 +445,6 @@ func TestEncodeControlRejectsMalformedCommands(t *testing.T) {
 	thresholds := domain.Thresholds{TemperatureHighC: 30, HumidityHighRh: 80, GasHighPpm: 80}
 
 	cases := map[string]domain.Command{
-		"mute without a payload": {
-			RequestID: "01", DeviceID: "MCU001", Type: domain.CommandSetMute,
-			State: domain.CommandAccepted,
-		},
 		"thresholds without a version": {
 			RequestID: "02", DeviceID: "MCU001", Type: domain.CommandSetThresholds,
 			State:   domain.CommandAccepted,
@@ -474,12 +456,18 @@ func TestEncodeControlRejectsMalformedCommands(t *testing.T) {
 			Payload: domain.CommandPayload{Thresholds: &domain.Thresholds{GasHighPpm: 5000}, ThresholdVersion: &version},
 		},
 		"empty request id": {
-			RequestID: "", DeviceID: "MCU001", Type: domain.CommandSetMute,
-			State:   domain.CommandAccepted,
-			Payload: domain.CommandPayload{Muted: boolPtr(true)},
+			RequestID: "", DeviceID: "MCU001", Type: domain.CommandSetThresholds,
+			State: domain.CommandAccepted,
+			Payload: domain.CommandPayload{
+				Thresholds: &thresholds, ThresholdVersion: &version,
+			},
 		},
 		"unknown type": {
 			RequestID: "05", DeviceID: "MCU001", Type: "set_everything",
+			State: domain.CommandAccepted,
+		},
+		"retired set_mute type": {
+			RequestID: "06", DeviceID: "MCU001", Type: "set_mute",
 			State: domain.CommandAccepted,
 		},
 	}
@@ -502,21 +490,24 @@ func TestDecodeControlRejections(t *testing.T) {
 		"requestId":     "01REQ",
 		"issuedAt":      receivedAt.UnixMilli(),
 		"expiresAt":     receivedAt.Add(time.Minute).UnixMilli(),
-		"type":          "set_mute",
-		"payload":       map[string]any{"muted": true},
+		"type":          "set_thresholds",
+		"payload": map[string]any{
+			"thresholdVersion": 2, "temperatureHighC": 30, "humidityHighRh": 80, "gasHighPpm": 80,
+		},
 	}
 
 	cases := map[string]struct {
 		mutate func(map[string]any)
 	}{
-		"missing payload":     {mutate: func(f map[string]any) { delete(f, "payload") }},
-		"missing muted":       {mutate: func(f map[string]any) { f["payload"] = map[string]any{} }},
+		"missing payload": {mutate: func(f map[string]any) { delete(f, "payload") }},
+		"missing thresholds fields": {
+			mutate: func(f map[string]any) { f["payload"] = map[string]any{} },
+		},
 		"unknown type":        {mutate: func(f map[string]any) { f["type"] = "set_everything" }},
 		"unknown field":       {mutate: func(f map[string]any) { f["extra"] = 1 }},
 		"unsupported version": {mutate: func(f map[string]any) { f["schemaVersion"] = 9 }},
 		"thresholds out of range": {
 			mutate: func(f map[string]any) {
-				f["type"] = "set_thresholds"
 				f["payload"] = map[string]any{
 					"thresholdVersion": 2, "temperatureHighC": 30,
 					"humidityHighRh": 80, "gasHighPpm": 5000,
@@ -534,12 +525,22 @@ func TestDecodeControlRejections(t *testing.T) {
 		})
 	}
 
+	// The retired remote-mute command must be rejected as bad_request_type.
+	t.Run("retired set_mute is bad_request_type", func(t *testing.T) {
+		fields := cloneFields(valid)
+		fields["type"] = "set_mute"
+		fields["payload"] = map[string]any{"muted": true}
+		_, err := protocol.DecodeControl(mustJSON(t, fields), receivedAt)
+		if err == nil {
+			t.Fatal("set_mute was accepted")
+		}
+		if reason := reasonOf(err); reason != protocol.ReasonBadRequestType {
+			t.Fatalf("set_mute was rejected as %q, want bad_request_type", reason)
+		}
+	})
+
 	// The positive case: a valid set_thresholds command.
 	fields := cloneFields(valid)
-	fields["type"] = "set_thresholds"
-	fields["payload"] = map[string]any{
-		"thresholdVersion": 2, "temperatureHighC": 30, "humidityHighRh": 80, "gasHighPpm": 80,
-	}
 	command, err := protocol.DecodeControl(mustJSON(t, fields), receivedAt)
 	if err != nil {
 		t.Fatalf("a valid thresholds command was refused: %v", err)
@@ -581,7 +582,6 @@ func telemetryJSON(mutate func(map[string]any)) []byte {
 		"gasCalibrated":    false,
 		"localAlarm":       false,
 		"alarmCauses":      []string{},
-		"buzzerMuted":      false,
 		"network":          "online",
 		"thresholdVersion": 3,
 		"sensorFault":      false,

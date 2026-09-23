@@ -130,7 +130,6 @@ backend/
 | GET | `/api/v1/devices/{deviceId}/telemetry` | 历史遥测 |
 | GET | `/api/v1/devices/{deviceId}/alerts` | 历史告警 |
 | GET/PUT | `/api/v1/devices/{deviceId}/thresholds` | 查询或修改阈值 |
-| POST | `/api/v1/devices/{deviceId}/commands/mute` | 远程静音/恢复 |
 | GET | `/api/v1/devices/{deviceId}/commands/{requestId}` | 查询命令状态 |
 | GET | `/ws/v1/devices/{deviceId}/telemetry` | WebSocket 实时流 |
 

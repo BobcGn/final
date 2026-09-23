@@ -151,39 +151,6 @@ func (s *Service) RequestThresholdUpdate(ctx context.Context, deviceID string, d
 	return s.publish(ctx, command)
 }
 
-// RequestMute validates a mute request and publishes a set_mute command.
-//
-// Muting only suppresses the buzzer. It never clears the alarm state and never
-// stops sampling, LED indication or telemetry reporting; that behaviour is a
-// device-side contract in docs/device-protocol.md §3.2 and is not negotiable
-// here.
-func (s *Service) RequestMute(ctx context.Context, deviceID string, muted bool, idempotencyKey, actor string) (domain.Command, error) {
-	if err := domain.ValidateDeviceID(deviceID); err != nil {
-		return domain.Command{}, err
-	}
-	if idempotencyKey == "" {
-		return domain.Command{}, fmt.Errorf("%w: Idempotency-Key is required for control requests", domain.ErrInvalidCommand)
-	}
-
-	if existing, err := s.store.CommandByIdempotencyKey(ctx, deviceID, idempotencyKey); err == nil {
-		if existing.Payload.Muted == nil || *existing.Payload.Muted != muted {
-			return domain.Command{}, fmt.Errorf("%w: device %s key %s", ErrIdempotencyConflict, deviceID, idempotencyKey)
-		}
-		return existing, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return domain.Command{}, fmt.Errorf("command: look up idempotency key: %w", err)
-	}
-
-	now := s.now().UTC()
-	command := s.newCommand(deviceID, idempotencyKey, actor, now, domain.CommandSetMute)
-	command.Payload.Muted = &muted
-
-	if err := s.store.InsertCommand(ctx, command); err != nil {
-		return domain.Command{}, fmt.Errorf("command: record mute command: %w", err)
-	}
-	return s.publish(ctx, command)
-}
-
 // newCommand builds a freshly accepted command.
 func (s *Service) newCommand(deviceID, idempotencyKey, actor string, now time.Time, commandType domain.CommandType) domain.Command {
 	return domain.Command{

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Smart Lab Environment Monitoring API
-  version: 1.0.0
+  version: 2.0.0
   description: >-
     Frozen REST and WebSocket contract for the Go backend (SHIXUN-3). Route
     paths, field names, units, enums, error codes and lifecycle semantics are
@@ -212,43 +212,6 @@ paths:
           $ref: '#/components/responses/VersionConflict'
         '422':
           $ref: '#/components/responses/InvalidThreshold'
-        '503':
-          $ref: '#/components/responses/BrokerUnavailable'
-  /api/v1/devices/{deviceId}/commands/mute:
-    post:
-      operationId: setDeviceMute
-      tags: [commands]
-      summary: Enqueue a buzzer mute or unmute command
-      description: >-
-        Muting only suppresses the buzzer. It never clears localAlarm, never
-        disables the LED or OLED indication, and never stops sampling or
-        telemetry reporting.
-      parameters:
-        - $ref: '#/components/parameters/DeviceId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MuteCommand'
-      responses:
-        '202':
-          description: Command accepted; device acknowledgement is pending
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CommandAccepted'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/VersionConflict'
         '503':
           $ref: '#/components/responses/BrokerUnavailable'
   /api/v1/devices/{deviceId}/commands/{requestId}:
@@ -498,8 +461,6 @@ components:
           enum: [online, offline, unknown]
         alarmState:
           $ref: '#/components/schemas/AlertState'
-        buzzerMuted:
-          type: boolean
         localAlarm:
           type: boolean
         offlineAfterSeconds:
@@ -577,8 +538,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AlarmCause'
-        buzzerMuted:
-          type: boolean
         network:
           type: string
           enum: [online, reconnecting]
@@ -701,13 +660,6 @@ components:
           type: number
           minimum: 1
           maximum: 999
-    MuteCommand:
-      type: object
-      required: [muted]
-      additionalProperties: false
-      properties:
-        muted:
-          type: boolean
     CommandAccepted:
       type: object
       required: [requestId, status]
@@ -734,7 +686,7 @@ components:
           type: string
         type:
           type: string
-          enum: [set_mute, set_thresholds]
+          enum: [set_thresholds]
         state:
           type: string
           description: >-

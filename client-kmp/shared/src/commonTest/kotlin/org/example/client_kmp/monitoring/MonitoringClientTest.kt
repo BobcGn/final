@@ -25,7 +25,7 @@ class MonitoringClientTest {
 
     private val statusBody =
         """{"deviceId":"MCU001","connectivity":"online","alarmState":"fire_warning",""" +
-            """"buzzerMuted":false,"localAlarm":true,"lastSeenAt":"2026-09-21T09:00:00Z"}"""
+            """"localAlarm":true,"lastSeenAt":"2026-09-21T09:00:00Z"}"""
 
     private val telemetryBody =
         """{"deviceId":"MCU001","receivedAt":"2026-09-21T10:00:00Z","temperatureC":40,"humidityRh":50,""" +
@@ -279,34 +279,13 @@ class MonitoringClientTest {
     // --- commands ----------------------------------------------------------------------
 
     @Test
-    fun mutingAndRestoringSendTheContractBodyWithAFreshKey() = runTest {
-        val platform = FakePlatform { HttpResponse(202, """{"requestId":"cmd-1","status":"pending"}""") }
-        val client = MonitoringClient(platform, "http://test")
-
-        val muted = client.setMuted(true)
-        val restored = client.setMuted(false)
-
-        assertEquals(listOf("""{"muted":true}""", """{"muted":false}"""), platform.requests.map { it.body })
-        assertEquals(listOf("POST", "POST"), platform.requests.map { it.method })
-        assertEquals(
-            listOf("http://test/api/v1/devices/MCU001/commands/mute", "http://test/api/v1/devices/MCU001/commands/mute"),
-            platform.requests.map { it.url },
-        )
-        assertEquals(listOf("key-1", "key-2"), platform.requests.map { it.headers["Idempotency-Key"] })
-        // The accepting response is an acknowledgement, never a confirmation.
-        assertEquals("等待设备确认", muted.stateText)
-        assertFalse(muted.confirmed)
-        assertEquals("等待设备确认", restored.stateText)
-    }
-
-    @Test
     fun everyControlRequestCarriesAUniqueIdempotencyKey() = runTest {
         val platform = FakePlatform { HttpResponse(202, """{"requestId":"cmd-1","status":"pending"}""") }
         val client = MonitoringClient(platform, "http://test")
 
-        client.setMuted(true)
-        client.setMuted(true)
-        client.setMuted(true)
+        client.updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0))
+        client.updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0))
+        client.updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0))
 
         val keys = platform.requests.map { it.headers["Idempotency-Key"] }
         assertEquals(3, keys.toSet().size, "keys were reused: $keys")
@@ -320,7 +299,7 @@ class MonitoringClientTest {
         val client = MonitoringClient(platform, "http://test")
 
         client.loadTrends()
-        client.setMuted(true)
+        client.updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0))
 
         val read = platform.requests.first()
         assertNull(read.headers["Idempotency-Key"], "a query must not carry a control key")
@@ -385,7 +364,7 @@ class MonitoringClientTest {
         val platform = FakePlatform {
             HttpResponse(
                 200,
-                """{"requestId":"cmd-1","deviceId":"MCU001","type":"set_mute","state":"published",""" +
+                """{"requestId":"cmd-1","deviceId":"MCU001","type":"set_thresholds","state":"published",""" +
                     """"acceptedAt":"2026-09-21T10:00:00Z"}""",
             )
         }
@@ -406,7 +385,7 @@ class MonitoringClientTest {
             } else {
                 HttpResponse(
                     200,
-                    """{"requestId":"cmd-1","deviceId":"MCU001","type":"set_mute","state":"applied",""" +
+                    """{"requestId":"cmd-1","deviceId":"MCU001","type":"set_thresholds","state":"applied",""" +
                         """"acceptedAt":"2026-09-21T10:00:00Z"}""",
                 )
             }
@@ -472,7 +451,7 @@ class MonitoringClientTest {
             HttpResponse(503, """{"error":{"code":"broker_unavailable","message":"broker down"}}""")
         }
 
-        val error = assertFailsWith<MonitoringException> { MonitoringClient(platform, "http://test").setMuted(true) }
+        val error = assertFailsWith<MonitoringException> { MonitoringClient(platform, "http://test").loadSettings() }
 
         assertEquals("broker_unavailable", error.code)
         assertEquals(503, error.statusCode)
@@ -611,7 +590,7 @@ class MonitoringClientTest {
         val client = MonitoringClient(platform, "http://test")
 
         val settings = client.encodeSettings(client.loadSettings())
-        val command = client.encodeCommandStatus(client.setMuted(true))
+        val command = client.encodeCommandStatus(client.updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0)))
 
         assertTrue(settings.contains("\"confirmationText\":\"设备已确认\""), "actual: $settings")
         assertTrue(settings.contains("\"confirmed\":true"))

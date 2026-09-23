@@ -119,8 +119,8 @@ type Acknowledgement struct {
 	ErrorCode string
 	// ReportsVersion records whether this acknowledgement carries the device's
 	// threshold version. Only a set_thresholds acknowledgement may, because only
-	// that command can change it: reporting it for a mute would tell the backend
-	// the device adopted a configuration the command never carried.
+	// that command can change it: reporting it for any other command would tell
+	// the backend the device adopted a configuration the command never carried.
 	ReportsVersion bool
 }
 
@@ -133,7 +133,6 @@ type Simulator struct {
 	mu              sync.Mutex
 	sequence        uint32
 	step            int
-	muted           bool
 	thresholds      domain.Thresholds
 	thresholdVer    int
 	received        []domain.Command
@@ -230,11 +229,10 @@ func (s *Simulator) PublishOnce(ctx context.Context) error {
 	s.step++
 	sequence := s.sequence
 	s.sequence++
-	muted := s.muted
 	thresholdVer := s.thresholdVer
 	s.mu.Unlock()
 
-	payload, err := s.telemetryPayload(sample, sequence, muted, thresholdVer)
+	payload, err := s.telemetryPayload(sample, sequence, thresholdVer)
 	if err != nil {
 		return err
 	}
@@ -256,7 +254,7 @@ func (s *Simulator) PublishOnce(ctx context.Context) error {
 // telemetryPayload renders one sample through the frozen codec. Using the same
 // encoder the device tests use means the simulator cannot drift from the
 // contract silently.
-func (s *Simulator) telemetryPayload(sample Sample, sequence uint32, muted bool, thresholdVer int) ([]byte, error) {
+func (s *Simulator) telemetryPayload(sample Sample, sequence uint32, thresholdVer int) ([]byte, error) {
 	network := domain.NetworkOnline
 	if !s.client.Connected() {
 		network = domain.NetworkReconnecting
@@ -274,7 +272,6 @@ func (s *Simulator) telemetryPayload(sample Sample, sequence uint32, muted bool,
 		GasCalibrated:    false,
 		LocalAlarm:       sample.LocalAlarm,
 		AlarmCauses:      sample.AlarmCauses,
-		BuzzerMuted:      muted,
 		Network:          network,
 		ThresholdVersion: thresholdVer,
 		SensorFault:      sample.SensorFault,
@@ -376,20 +373,6 @@ func (s *Simulator) applyCommand(command domain.Command) Acknowledgement {
 	}
 
 	switch command.Type {
-	case domain.CommandSetMute:
-		if command.Payload.Muted == nil {
-			return s.rememberLocked(command.RequestID, Acknowledgement{
-				RequestID: command.RequestID, Status: string(domain.AckRejected), ErrorCode: string(domain.AckErrOutOfRange),
-			})
-		}
-		// Muting only suppresses the buzzer. The alarm state, the LED and the
-		// reported causes are untouched: the payload keeps reporting localAlarm
-		// while buzzerMuted is true.
-		s.muted = *command.Payload.Muted
-		return s.rememberLocked(command.RequestID, Acknowledgement{
-			RequestID: command.RequestID, Status: string(domain.AckApplied),
-		})
-
 	case domain.CommandSetThresholds:
 		if command.Payload.Thresholds == nil || command.Payload.ThresholdVersion == nil {
 			return s.rememberLocked(command.RequestID, Acknowledgement{
@@ -485,13 +468,6 @@ func (s *Simulator) Acknowledgements() []Acknowledgement {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Acknowledgement(nil), s.sentAcks...)
-}
-
-// Muted reports the simulator's current mute state.
-func (s *Simulator) Muted() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.muted
 }
 
 // ThresholdVersion reports the version the simulated device has in force.

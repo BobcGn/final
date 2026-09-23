@@ -41,6 +41,7 @@ typedef struct
     uint16_t pending_sub_packet_id;
     MqttLinkState state;
     uint32_t last_activity_ms;
+    uint32_t last_rx_ms;
     uint32_t now_ms;
     ControlLink *link;
     SessionSendBytesFn send_fn;
@@ -61,6 +62,12 @@ void SessionDispatchTcpDisconnected(SessionDispatcher *dispatcher);
 
 /* Synchronize online status from current dispatcher state to ControlLink. */
 void SessionDispatchSyncOnline(SessionDispatcher *dispatcher);
+
+/* A stale ESP8266 TCP flag is not proof of a live MQTT session. During the
+ * handshake allow 10 seconds for the broker response; once online, QoS 1
+ * telemetry yields PUBACKs each second, so 45 seconds without any broker frame
+ * means the socket must be closed and opened again. */
+bool SessionDispatchNeedsReconnect(const SessionDispatcher *dispatcher, uint32_t now_ms);
 
 /* Visitor callback to pass into ControlLinkHandleBuffer. */
 bool SessionDispatchFrame(void *context, const MqttPacket *packet,

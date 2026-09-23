@@ -259,7 +259,6 @@ function startMockFeed(deviceId) {
             gasAdcFiltered: latest.gasAdcFiltered,
             gasPpm: latest.gasPpm,
             localAlarm: latest.localAlarm,
-            buzzerMuted: latest.buzzerMuted,
           })
         )
 

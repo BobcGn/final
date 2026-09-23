@@ -75,7 +75,6 @@ type TelemetryData struct {
 	GasCalibrated  bool                `json:"gasCalibrated"`
 	LocalAlarm     bool                `json:"localAlarm"`
 	AlarmCauses    []domain.AlarmCause `json:"alarmCauses"`
-	BuzzerMuted    bool                `json:"buzzerMuted"`
 	SensorFault    bool                `json:"sensorFault"`
 }
 
@@ -157,7 +156,6 @@ func TelemetryDataFrom(sample domain.Telemetry) TelemetryData {
 		GasCalibrated:  sample.GasCalibrated,
 		LocalAlarm:     sample.LocalAlarm,
 		AlarmCauses:    sample.AlarmCauses,
-		BuzzerMuted:    sample.BuzzerMuted,
 		SensorFault:    sample.SensorFault,
 	}
 }

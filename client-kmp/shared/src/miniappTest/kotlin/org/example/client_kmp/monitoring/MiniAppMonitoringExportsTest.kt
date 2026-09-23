@@ -34,7 +34,6 @@ class MiniAppMonitoringExportsTest {
         assertEquals("function", jsTypeOf(LabMonitorExports::settings))
         assertEquals("function", jsTypeOf(LabMonitorExports::commandStatus))
         assertEquals("function", jsTypeOf(LabMonitorExports::awaitCommandOutcome))
-        assertEquals("function", jsTypeOf(LabMonitorExports::mute))
         assertEquals("function", jsTypeOf(LabMonitorExports::updateThresholds))
         assertEquals("function", jsTypeOf(LabMonitorExports::selectors))
     }

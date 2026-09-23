@@ -130,16 +130,9 @@ uint32_t ControlLinkSequence(const ControlLink *link)
  * A threshold command is only brought into force after the store reports the
  * record written and verified, so a power loss between the two leaves the device
  * enforcing the previous limits rather than a version number that describes
- * something it never stored. The mute command touches nothing but the monitor's
- * mute flag — never the alarm causes, the LED, the OLED or the telemetry. */
+ * something it never stored. */
 static CommandResult ExecuteCommand(ControlLink *link, const ControlCommand *command)
 {
-    if (command->type == COMMAND_SET_MUTE)
-    {
-        EnvMonitorSetMuted(link->monitor, command->muted);
-        return COMMAND_RESULT_APPLIED;
-    }
-
     if (link->store == NULL)
     {
         /* Without a store the device cannot honour the contract's "survives a
@@ -190,10 +183,9 @@ static void HandleControlPublish(ControlLink *link, const MqttPacket *packet,
     CommandResult remembered = COMMAND_RESULT_APPLIED;
     uint32_t ack_length;
 
-    command.type = COMMAND_SET_MUTE;
+    command.type = COMMAND_SET_THRESHOLDS;
     command.request_id[0] = '\0';
     command.window_ms = 0U;
-    command.muted = false;
     command.threshold_version = 0U;
     command.thresholds.temperature_high_c = 0U;
     command.thresholds.humidity_high_rh = 0U;
@@ -227,8 +219,7 @@ static void HandleControlPublish(ControlLink *link, const MqttPacket *packet,
     if (CommandDedupLookup(&link->dedup, command.request_id, &remembered))
     {
         /* Already handled. The first result stands and is not recomputed, so a
-         * redelivery can never write Flash a second time or flip the mute flag
-         * back. */
+         * redelivery can never write Flash a second time. */
         result = COMMAND_RESULT_DUPLICATE;
     }
     else if (result == COMMAND_RESULT_APPLIED)
@@ -265,7 +256,7 @@ static void HandleControlPublish(ControlLink *link, const MqttPacket *packet,
     ack.result = result;
     /* A threshold command reports the version it left in force: the newly applied
      * one, or the one already stored when the command turned out to be a
-     * redelivery. A mute command reports none. */
+     * redelivery. */
     if (command.type == COMMAND_SET_THRESHOLDS)
     {
         ack.threshold_version = (result == COMMAND_RESULT_APPLIED) ?

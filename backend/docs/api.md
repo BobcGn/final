@@ -1,6 +1,6 @@
 # Backend API Detailed Contract
 
-状态：`v1.0.0`（已冻结，与 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml) 同步）。本文是 Go Backend 的开发者接口说明；机器可读事实源是 OpenAPI 文件。
+状态：`v2.0.0`（已冻结，与 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml) 同步；远程静音已删除）。本文是 Go Backend 的开发者接口说明；机器可读事实源是 OpenAPI 文件。
 
 **当前实现状态**：`/healthz` 与全部 `/api/v1` 路由、`/ws/v1` 实时流均已实现。数据来自 MQTT 接入的设备遥测；未配置 `MQTT_BROKER_URL` 时进程仍可启动，但没有设备数据，控制命令会返回 `503 broker_unavailable`。
 
@@ -35,7 +35,7 @@ Health:    /healthz
 
 `AUTH_TOKENS` 格式为 `token:actor,token:actor`。**actor 是必填的**，它写入控制命令的审计字段；没有 actor 的 token 会导致启动失败。token 比较使用常数时间比较。
 
-`AUTH_MODE=none` 时控制类路由对任何能访问端口的人开放，**不得**部署到不可信网络。设备访问范围隔离（哪些用户可访问哪些设备）与查看/静音/改阈值分权尚未实现，属于后续工作。
+`AUTH_MODE=none` 时控制类路由对任何能访问端口的人开放，**不得**部署到不可信网络。设备访问范围隔离（哪些用户可访问哪些设备）与查看/改阈值分权尚未实现，属于后续工作。
 
 ### 1.4 Common Headers
 
@@ -106,7 +106,6 @@ Health:    /healthz
 | GET | `/api/v1/devices/{deviceId}/alerts` | 历史告警分页 | Implemented |
 | GET | `/api/v1/devices/{deviceId}/thresholds` | 期望与设备确认阈值 | Implemented |
 | PUT | `/api/v1/devices/{deviceId}/thresholds` | 校验并下发阈值 | Implemented |
-| POST | `/api/v1/devices/{deviceId}/commands/mute` | 静音或恢复蜂鸣器 | Implemented |
 | GET | `/api/v1/devices/{deviceId}/commands/{requestId}` | 查询控制命令状态 | Implemented |
 | GET | `/ws/v1/devices/{deviceId}/telemetry` | 实时 WebSocket 流 | Implemented |
 
@@ -132,7 +131,6 @@ Health:    /healthz
   "connectivity": "online",
   "alarmState": "suspect",
   "localAlarm": true,
-  "buzzerMuted": false,
   "lastSeenAt": "2026-09-24T10:40:30Z",
   "offlineAfterSeconds": 15,
   "thresholdVersion": { "desired": 4, "confirmed": 4 }
@@ -173,7 +171,6 @@ Health:    /healthz
   "gasCalibrated": false,
   "localAlarm": true,
   "alarmCauses": ["gas_high"],
-  "buzzerMuted": false,
   "network": "online",
   "sensorFault": false
 }
@@ -323,33 +320,9 @@ Idempotency-Key: 01K5H0PN0M1N9NB8B7RBTVWT8P
 - 设备只在其 Flash 校验写入成功后更新生效版本并回执 `applied`。
 - 设备在遥测中持续上报 `thresholdVersion`；Backend 据此确认版本，即使原始 ACK 丢失也能收敛。
 
-## 9. Buzzer Mute
+设备离线时控制命令短期排队并带 `expiresAt`；过期后**绝不**在重连时执行，只会被标记为 `timed_out`。
 
-### POST `/api/v1/devices/{deviceId}/commands/mute`
-
-```http
-Idempotency-Key: 01K5H0M8YH1F4H4X6B62R9JB5A
-```
-
-```json
-{ "muted": true }
-```
-
-**静音只抑制蜂鸣器**：不清除 `localAlarm`、不关闭 LED 或 OLED 标识、不停止采样与上报。控制报文中不存在"清除告警"的表达方式，本地告警判断始终是权威。
-
-`202 Accepted`：
-
-```json
-{
-  "requestId": "01K5H0M8YH1F4H4X6B62R9JB5A",
-  "status": "pending",
-  "expiresAt": "2026-09-24T10:21:30Z"
-}
-```
-
-设备离线时命令短期排队并带 `expiresAt`；过期后**绝不**在重连时执行，只会被标记为 `timed_out`。
-
-## 10. Command Status
+## 9. Command Status
 
 ### GET `/api/v1/devices/{deviceId}/commands/{requestId}`
 
@@ -388,7 +361,7 @@ accepted → published → applied
 - 终态**不会**被后续迟到的 ACK 改写：客户端可能已经看到过该结果。
 - 重复的相同 ACK 是幂等的（MQTT QoS 1 至少一次投递）。
 
-## 11. WebSocket Telemetry
+## 10. WebSocket Telemetry
 
 ### GET `/ws/v1/devices/{deviceId}/telemetry`
 
@@ -424,7 +397,7 @@ accepted → published → applied
 - 同一 `eventId` 可用于去重；客户端不能假定事件绝不重复。
 - 默认只允许同源 Origin；非浏览器客户端（无 Origin 头）允许连接。
 
-## 12. 复合火情预警算法
+## 11. 复合火情预警算法
 
 参数（可由 dotenv 中的 `ALERT_*` 字段设置，见 §13）：
 
@@ -466,7 +439,7 @@ confirmed = gasSurge && rapidRise && sampleCount >= MIN_SAMPLES && span >= MIN_D
 
 `gasAdcRise` 使用中位数基线：单个离群读数不会像使用均值那样把基线抬高并制造"突增"。
 
-## 13. Configuration
+## 12. Configuration
 
 进程启动时直接读取 `backend/.env.local`。已提交的 `backend/.env.example`
 是完整模板，`.env.local` 保存本机密码与地址并被 Git 忽略。可用

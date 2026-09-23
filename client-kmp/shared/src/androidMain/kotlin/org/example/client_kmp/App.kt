@@ -191,12 +191,6 @@ private fun Hint(text: String, color: Color = TextSecondary) {
 private fun DashboardScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<DashboardView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    // The hint carries the shared tone so a rejection, a timeout and a device
-    // confirmation are visually distinct rather than three shades of one line.
-    var commandHint by remember { mutableStateOf("") }
-    var commandTone by remember { mutableStateOf(Tone.WARNING) }
-    val scope = rememberCoroutineScope()
 
     // Refreshes once per interval. Failures are captured into `error`, so a
     // network blip can never terminate the loop: the next tick retries.
@@ -206,27 +200,6 @@ private fun DashboardScreen(client: MonitoringClient) {
                 .onSuccess { view = it; error = null }
                 .onFailure { error = it.message }
             delay(DASHBOARD_REFRESH_MS)
-        }
-    }
-
-    // Disabled while in flight, so a double tap cannot enqueue two commands.
-    fun toggleMute(currentlyMuted: Boolean) {
-        if (busy) return
-        busy = true
-        scope.launch {
-            runCatching {
-                val accepted = client.setMuted(!currentlyMuted)
-                commandHint = accepted.stateText
-                commandTone = accepted.tone
-                // The enqueue response is only an acknowledgement; wait for the device.
-                val settled = client.awaitCommandOutcome(accepted.requestId)
-                // Null means the device had not answered inside the polling budget.
-                // That is "still awaiting", so it must not read as a failure either.
-                commandHint = settled?.stateText ?: "等待设备确认"
-                commandTone = settled?.tone ?: Tone.WARNING
-            }.onFailure { error = it.message }
-            runCatching { client.loadDashboard() }.onSuccess { view = it }
-            busy = false
         }
     }
 
@@ -261,20 +234,8 @@ private fun DashboardScreen(client: MonitoringClient) {
             GlassCard {
                 Text(data.deviceId, color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                 KeyValue("本地报警", data.localAlarmText, if (data.localAlarm) Danger else Mint)
-                KeyValue("声光提示", data.buzzerText, if (data.buzzerMuted) Warning else TextPrimary)
+                KeyValue("声光提示", data.buzzerText, TextPrimary)
                 KeyValue("更新时间", data.updatedAt, TextPrimary)
-            }
-            SectionTitle("远程控制", "静音不影响检测与上报")
-            GlassCard {
-                Text("蜂鸣器控制", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Text(data.muteHint, color = TextSecondary, fontSize = 12.sp)
-                if (commandHint.isNotEmpty()) Hint(commandHint, toneColor(commandTone))
-                Button(
-                    enabled = !busy,
-                    onClick = { toggleMute(data.buzzerMuted) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Background),
-                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                ) { Text(if (busy) "下发中…" else if (data.buzzerMuted) "恢复鸣叫" else "远程静音") }
             }
         }
     }

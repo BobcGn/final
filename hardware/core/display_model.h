@@ -58,8 +58,7 @@ typedef struct
      * is wiring or power, a checksum failure is the sensor or the bit timing.
      * Only meaningful while the sensor-fault cause bit is set. */
     uint8_t dht_error;
-    bool buzzer_muted;
-    /* Actual instantaneous output after cause filtering and beep cadence. */
+    /* Actual audible-alarm state after cause filtering and beep cadence. */
     bool buzzer_active;
     /* True while the gas estimate comes from an uncalibrated curve, which the
      * gas page says out loud instead of presenting the number as a measurement. */

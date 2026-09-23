@@ -91,12 +91,13 @@ class AndroidMonitoringPlatformTest {
         val requests = mutableListOf<RecordedRequest>()
         val baseUrl = start(requests, """{"requestId":"cmd-7","status":"pending"}""", status = 202)
 
-        val accepted = MonitoringClient(AndroidMonitoringPlatform(), baseUrl).setMuted(true)
+        val accepted = MonitoringClient(AndroidMonitoringPlatform(), baseUrl)
+            .updateThresholds(ThresholdUpdate(30.0, 80.0, 20.0))
 
         val request = requests.single()
-        assertEquals("POST", request.method)
-        assertEquals("/api/v1/devices/MCU001/commands/mute", request.path)
-        assertEquals("""{"muted":true}""", request.body)
+        assertEquals("PUT", request.method)
+        assertEquals("/api/v1/devices/MCU001/thresholds", request.path)
+        assertEquals("""{"temperatureHighC":30.0,"humidityHighRh":80.0,"gasHighPpm":20.0}""", request.body)
         assertTrue(request.contentType.orEmpty().startsWith("application/json"))
         assertTrue(!request.idempotencyKey.isNullOrBlank(), "control request carried no Idempotency-Key")
         // 202 means accepted, and the shared view must say so rather than claim confirmation.

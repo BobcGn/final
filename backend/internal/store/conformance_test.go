@@ -65,7 +65,6 @@ func sample(deviceID, bootID string, sequence uint32, at time.Time) domain.Telem
 		GasCalibrated:    false,
 		LocalAlarm:       false,
 		AlarmCauses:      []domain.AlarmCause{},
-		BuzzerMuted:      false,
 		Network:          domain.NetworkOnline,
 		ThresholdVersion: 1,
 		SensorFault:      false,
@@ -428,7 +427,6 @@ func testDeviceState(t *testing.T, factory Factory) {
 		Connectivity:              domain.ConnectivityOnline,
 		AlarmState:                domain.AlertSuspect,
 		ActiveAlertID:             "01ABC",
-		BuzzerMuted:               true,
 		LocalAlarm:                true,
 		ThresholdVersionConfirmed: 3,
 		ThresholdVersionDesired:   3,
@@ -450,7 +448,7 @@ func testDeviceState(t *testing.T, factory Factory) {
 	if readBack.LastSequence != 8 || readBack.Connectivity != domain.ConnectivityOffline {
 		t.Fatalf("device state did not update: %+v", readBack)
 	}
-	if !readBack.BuzzerMuted || !readBack.LocalAlarm {
+	if !readBack.LocalAlarm {
 		t.Fatalf("boolean flags were lost: %+v", readBack)
 	}
 
@@ -520,15 +518,17 @@ func testThresholds(t *testing.T, factory Factory) {
 	}
 }
 
-// muteCommand builds a valid accepted mute command.
-func muteCommand(requestID, deviceID, key string, at time.Time) domain.Command {
-	muted := true
+// thresholdsCommand builds a valid accepted set_thresholds command.
+func thresholdsCommand(requestID, deviceID, key string, at time.Time) domain.Command {
+	version := domain.InitialThresholdVersion
+	thresholds := domain.Thresholds{TemperatureHighC: 30, HumidityHighRh: 80, GasHighPpm: 80}
 	return domain.Command{
 		RequestID:      requestID,
 		DeviceID:       deviceID,
-		Type:           domain.CommandSetMute,
+		Type:           domain.CommandSetThresholds,
 		State:          domain.CommandAccepted,
-		Payload:        domain.CommandPayload{Muted: &muted},
+		Payload:        domain.CommandPayload{Thresholds: &thresholds, ThresholdVersion: &version},
+		DesiredVersion: &version,
 		IdempotencyKey: key,
 		AcceptedAt:     at,
 		ExpiresAt:      at.Add(time.Minute),
@@ -542,7 +542,7 @@ func testCommandLifecycle(t *testing.T, factory Factory) {
 	ctx := context.Background()
 	subject := factory(t)
 
-	command := muteCommand("01REQ1", "MCU001", "01IDEM1", baseTime)
+	command := thresholdsCommand("01REQ1", "MCU001", "01IDEM1", baseTime)
 	if err := subject.InsertCommand(ctx, command); err != nil {
 		t.Fatalf("insert command: %v", err)
 	}
@@ -594,7 +594,7 @@ func testCommandIdempotency(t *testing.T, factory Factory) {
 	ctx := context.Background()
 	subject := factory(t)
 
-	if err := subject.InsertCommand(ctx, muteCommand("01REQ1", "MCU001", "01IDEM1", baseTime)); err != nil {
+	if err := subject.InsertCommand(ctx, thresholdsCommand("01REQ1", "MCU001", "01IDEM1", baseTime)); err != nil {
 		t.Fatalf("insert command: %v", err)
 	}
 	found, err := subject.CommandByIdempotencyKey(ctx, "MCU001", "01IDEM1")
@@ -606,10 +606,10 @@ func testCommandIdempotency(t *testing.T, factory Factory) {
 	}
 
 	// The same key on another device is a different logical request.
-	if err := subject.InsertCommand(ctx, muteCommand("01REQ2", "MCU002", "01IDEM1", baseTime)); err != nil {
+	if err := subject.InsertCommand(ctx, thresholdsCommand("01REQ2", "MCU002", "01IDEM1", baseTime)); err != nil {
 		t.Fatalf("same key on another device: %v", err)
 	}
-	if err := subject.InsertCommand(ctx, muteCommand("01REQ3", "MCU001", "01IDEM1", baseTime)); !errors.Is(err, store.ErrConflict) {
+	if err := subject.InsertCommand(ctx, thresholdsCommand("01REQ3", "MCU001", "01IDEM1", baseTime)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("reused key returned %v, want ErrConflict", err)
 	}
 	if _, err := subject.CommandByIdempotencyKey(ctx, "MCU001", "01NOPE"); !errors.Is(err, store.ErrNotFound) {
@@ -623,7 +623,7 @@ func testCommandExpiry(t *testing.T, factory Factory) {
 	ctx := context.Background()
 	subject := factory(t)
 
-	if err := subject.InsertCommand(ctx, muteCommand("01REQ1", "MCU001", "01IDEM1", baseTime)); err != nil {
+	if err := subject.InsertCommand(ctx, thresholdsCommand("01REQ1", "MCU001", "01IDEM1", baseTime)); err != nil {
 		t.Fatalf("insert command: %v", err)
 	}
 	if _, err := subject.MarkCommandPublished(ctx, "MCU001", "01REQ1", baseTime); err != nil {

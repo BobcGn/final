@@ -39,7 +39,6 @@ Page({
     latest: null,
     view: null,
     updatedAt: '--:--:--',
-    muting: false,
     /** 实时通道状态文案（来自 services/socket.js 的本地连接事件） */
     streamText: '连接中…',
   },
@@ -167,24 +166,5 @@ Page({
         gasPercent: Math.min(100, (latest.gasPpm / 100) * 100),
       },
     })
-  },
-
-  /**
-   * 远程静音/恢复：POST /commands/mute（202 表示后端已接受）。
-   * 契约要求由后端/设备确认后才改变状态，因此这里只提示「已下发」，
-   * buzzerMuted 的真实变化由 command.status_changed 或下次补数驱动。
-   */
-  async onMuteTap() {
-    if (this.data.muting || !this.data.latest) return
-    const muted = !this.data.latest.buzzerMuted
-    this.setData({ muting: true })
-    try {
-      await deviceService.muteBuzzer(this.data.deviceId, muted)
-      wx.showToast({ title: muted ? '静音命令已下发' : '恢复命令已下发', icon: 'none' })
-    } catch (e) {
-      wx.showToast({ title: (e && e.message) || '命令下发失败', icon: 'none' })
-    } finally {
-      this.setData({ muting: false })
-    }
   },
 })

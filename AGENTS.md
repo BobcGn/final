@@ -6,7 +6,7 @@
 4. 不得为了所谓“最佳实践”引入当前阶段不需要的框架、目录、抽象或依赖。
 5. `hardware`、`backend`、`client-kmp` 与 `client-wx-native` 必须保持清晰边界。
 6. 跨一级目录修改前必须说明原因、影响和涉及的事实源。
-7. API、设备协议与 Domain Model 是跨模块事实源，已冻结为 `docs/api/openapi.yaml`（v1.0.0）与 `docs/device-protocol.md`（v1.0.0-frozen）；修改必须走各自变更流程并同步受影响模块，不得单方面扩展或假定契约。
+7. API、设备协议与 Domain Model 是跨模块事实源，当前为 `docs/api/openapi.yaml` 与 `docs/device-protocol.md`（均为 v2.0.0，远程静音已删除）；修改必须走各自变更流程并同步受影响模块，不得单方面扩展或假定契约。
 8. `hardware` 现有代码默认视为高复用资产，优先保留和验证。
 9. `client-kmp` 与 `client-wx-native` 必须保持独立，不得互相复制内部实现形成隐式耦合。
 10. 当前已进入实现与验收阶段：PostgreSQL 持久化、MQTT 接入、WebSocket 推送与两套客户端业务页面均已实现；新增能力必须带文档与测试，不得回退到占位实现。

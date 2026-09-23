@@ -31,6 +31,7 @@ void SessionDispatchInit(SessionDispatcher *dispatcher, uint8_t *tx, uint32_t ca
     dispatcher->pending_sub_packet_id = 0U;
     dispatcher->state = MQTT_LINK_TCP;
     dispatcher->last_activity_ms = 0U;
+    dispatcher->last_rx_ms = 0U;
     dispatcher->now_ms = 0U;
     dispatcher->link = link;
     dispatcher->send_fn = send_fn;
@@ -60,6 +61,19 @@ void SessionDispatchSyncOnline(SessionDispatcher *dispatcher)
     ControlLinkSetOnline(dispatcher->link, dispatcher->state == MQTT_LINK_ONLINE);
 }
 
+bool SessionDispatchNeedsReconnect(const SessionDispatcher *dispatcher, uint32_t now_ms)
+{
+    if (dispatcher == NULL || dispatcher->state == MQTT_LINK_TCP)
+    {
+        return false;
+    }
+    if (dispatcher->state == MQTT_LINK_ONLINE)
+    {
+        return (uint32_t)(now_ms - dispatcher->last_rx_ms) >= 45000U;
+    }
+    return (uint32_t)(now_ms - dispatcher->last_rx_ms) >= 10000U;
+}
+
 bool SessionDispatchFrame(void *context, const MqttPacket *packet,
                           const ControlOutcome *outcome, const uint8_t *ack_payload)
 {
@@ -70,6 +84,8 @@ bool SessionDispatchFrame(void *context, const MqttPacket *packet,
     {
         return false;
     }
+
+    dispatcher->last_rx_ms = dispatcher->now_ms;
 
     if (dispatcher->state == MQTT_LINK_WAIT_CONNACK &&
         packet->type == MQTT_PACKET_CONNACK &&

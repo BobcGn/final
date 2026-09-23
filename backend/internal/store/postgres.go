@@ -120,13 +120,13 @@ func (p *Postgres) InsertTelemetry(ctx context.Context, sample domain.Telemetry)
 			device_id, boot_id, sequence, event_time, received_at, event_time_source,
 			device_timestamp, uptime_ms, temperature_c, humidity_rh, gas_adc_raw,
 			gas_adc_filtered, gas_ppm, gas_calibrated, local_alarm, alarm_causes,
-			buzzer_muted, network, threshold_version, sensor_fault)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			network, threshold_version, sensor_fault)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		ON CONFLICT (device_id, boot_id, sequence) DO NOTHING`,
 		sample.DeviceID, sample.BootID, int64(sample.Sequence), sample.EventTime(), sample.ReceivedAt,
 		sample.EventTimeSource(), sample.Timestamp, int64(sample.UptimeMs), sample.TemperatureC,
 		sample.HumidityRh, sample.GasAdcRaw, sample.GasAdcFiltered, sample.GasPpm,
-		sample.GasCalibrated, sample.LocalAlarm, causes, sample.BuzzerMuted, string(sample.Network),
+		sample.GasCalibrated, sample.LocalAlarm, causes, string(sample.Network),
 		sample.ThresholdVersion, sample.SensorFault)
 	if err != nil {
 		return false, fmt.Errorf("store: insert telemetry: %w", err)
@@ -138,7 +138,7 @@ func (p *Postgres) InsertTelemetry(ctx context.Context, sample domain.Telemetry)
 // place so that scan order cannot drift from the query.
 const telemetryColumns = `device_id, boot_id, sequence, device_timestamp, received_at,
 	uptime_ms, temperature_c, humidity_rh, gas_adc_raw, gas_adc_filtered, gas_ppm,
-	gas_calibrated, local_alarm, alarm_causes, buzzer_muted, network,
+	gas_calibrated, local_alarm, alarm_causes, network,
 	threshold_version, sensor_fault`
 
 // LatestTelemetry implements Store.
@@ -418,10 +418,10 @@ func (p *Postgres) UpsertDevice(ctx context.Context, state DeviceState) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO devices (
 			device_id, last_seen_at, last_boot_id, last_sequence, connectivity,
-			alarm_state, active_alert_id, buzzer_muted, local_alarm, sensor_fault,
+			alarm_state, active_alert_id, local_alarm, sensor_fault,
 			gas_calibrated, threshold_version_confirmed, threshold_version_desired,
 			updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (device_id) DO UPDATE SET
 			last_seen_at = EXCLUDED.last_seen_at,
 			last_boot_id = EXCLUDED.last_boot_id,
@@ -429,7 +429,6 @@ func (p *Postgres) UpsertDevice(ctx context.Context, state DeviceState) error {
 			connectivity = EXCLUDED.connectivity,
 			alarm_state = EXCLUDED.alarm_state,
 			active_alert_id = EXCLUDED.active_alert_id,
-			buzzer_muted = EXCLUDED.buzzer_muted,
 			local_alarm = EXCLUDED.local_alarm,
 			sensor_fault = EXCLUDED.sensor_fault,
 			gas_calibrated = EXCLUDED.gas_calibrated,
@@ -438,7 +437,7 @@ func (p *Postgres) UpsertDevice(ctx context.Context, state DeviceState) error {
 			updated_at = EXCLUDED.updated_at`,
 		state.DeviceID, nullableTime(state.LastSeenAt), state.LastBootID, int64(state.LastSequence),
 		string(state.Connectivity), string(state.AlarmState), nullableString(state.ActiveAlertID),
-		state.BuzzerMuted, state.LocalAlarm, state.SensorFault, state.GasCalibrated,
+		state.LocalAlarm, state.SensorFault, state.GasCalibrated,
 		state.ThresholdVersionConfirmed, state.ThresholdVersionDesired, state.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("store: upsert device: %w", err)
@@ -458,11 +457,11 @@ func (p *Postgres) Device(ctx context.Context, deviceID string) (DeviceState, er
 	)
 	err := p.pool.QueryRow(ctx, `
 		SELECT device_id, last_seen_at, last_boot_id, last_sequence, connectivity,
-			alarm_state, active_alert_id, buzzer_muted, local_alarm, sensor_fault,
+			alarm_state, active_alert_id, local_alarm, sensor_fault,
 			gas_calibrated, threshold_version_confirmed, threshold_version_desired, updated_at
 		FROM devices WHERE device_id = $1`, deviceID).
 		Scan(&state.DeviceID, &lastSeenAt, &state.LastBootID, &state.LastSequence, &state.Connectivity,
-			&state.AlarmState, &activeAlertID, &state.BuzzerMuted, &state.LocalAlarm, &state.SensorFault,
+			&state.AlarmState, &activeAlertID, &state.LocalAlarm, &state.SensorFault,
 			&state.GasCalibrated, &state.ThresholdVersionConfirmed, &state.ThresholdVersionDesired, &state.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DeviceState{}, fmt.Errorf("%w: device %s", ErrNotFound, deviceID)
@@ -611,14 +610,10 @@ func (p *Postgres) InsertCommand(ctx context.Context, command domain.Command) er
 		return err
 	}
 	return p.inTx(ctx, func(tx pgx.Tx) error {
-		var muted *bool
 		var temperature *float64
 		var humidity *float64
 		var gas *float64
 		var desiredVersion *int
-		if command.Payload.Muted != nil {
-			muted = command.Payload.Muted
-		}
 		if command.Payload.Thresholds != nil {
 			temperature = &command.Payload.Thresholds.TemperatureHighC
 			humidity = &command.Payload.Thresholds.HumidityHighRh
@@ -631,12 +626,12 @@ func (p *Postgres) InsertCommand(ctx context.Context, command domain.Command) er
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO device_commands (
 				request_id, device_id, type, state, idempotency_key, actor, accepted_at,
-				expires_at, muted, temperature_high_c, humidity_high_rh, gas_high_ppm,
+				expires_at, temperature_high_c, humidity_high_rh, gas_high_ppm,
 				desired_version)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 			command.RequestID, command.DeviceID, string(command.Type), string(command.State),
 			command.IdempotencyKey, command.Actor, command.AcceptedAt, command.ExpiresAt,
-			muted, temperature, humidity, gas, desiredVersion); err != nil {
+			temperature, humidity, gas, desiredVersion); err != nil {
 			if isUniqueViolation(err) {
 				return fmt.Errorf("%w: command or idempotency key already exists", ErrConflict)
 			}
@@ -674,7 +669,7 @@ func (p *Postgres) InsertCommand(ctx context.Context, command domain.Command) er
 
 // commandColumns is the projection used by every command read.
 const commandColumns = `request_id, device_id, type, state, idempotency_key, actor,
-	accepted_at, published_at, completed_at, expires_at, muted, temperature_high_c,
+	accepted_at, published_at, completed_at, expires_at, temperature_high_c,
 	humidity_high_rh, gas_high_ppm, desired_version, confirmed_version, error_code`
 
 // Command implements Store.
@@ -847,7 +842,7 @@ func scanTelemetry(row rowScanner) (domain.Telemetry, error) {
 		&sample.DeviceID, &sample.BootID, &sequence, &deviceTime, &receivedAt,
 		&uptimeMs, &sample.TemperatureC, &sample.HumidityRh, &sample.GasAdcRaw,
 		&sample.GasAdcFiltered, &sample.GasPpm, &sample.GasCalibrated, &sample.LocalAlarm,
-		&causes, &sample.BuzzerMuted, &network, &sample.ThresholdVersion, &sample.SensorFault)
+		&causes, &network, &sample.ThresholdVersion, &sample.SensorFault)
 	if err != nil {
 		return domain.Telemetry{}, err
 	}
@@ -898,7 +893,6 @@ func scanCommand(row rowScanner) (domain.Command, error) {
 		completedAt      *time.Time
 		acceptedAt       time.Time
 		expiresAt        time.Time
-		muted            *bool
 		temperature      *float64
 		humidity         *float64
 		gas              *float64
@@ -907,7 +901,7 @@ func scanCommand(row rowScanner) (domain.Command, error) {
 	)
 	err := row.Scan(
 		&command.RequestID, &command.DeviceID, &commandType, &state, &command.IdempotencyKey,
-		&command.Actor, &acceptedAt, &publishedAt, &completedAt, &expiresAt, &muted,
+		&command.Actor, &acceptedAt, &publishedAt, &completedAt, &expiresAt,
 		&temperature, &humidity, &gas, &desiredVersion, &confirmedVersion, &command.ErrorCode)
 	if err != nil {
 		return domain.Command{}, err
@@ -920,7 +914,6 @@ func scanCommand(row rowScanner) (domain.Command, error) {
 	command.ExpiresAt = expiresAt.UTC()
 	command.DesiredVersion = desiredVersion
 	command.ConfirmedVersion = confirmedVersion
-	command.Payload.Muted = muted
 	if temperature != nil && humidity != nil && gas != nil {
 		command.Payload.Thresholds = &domain.Thresholds{
 			TemperatureHighC: *temperature,

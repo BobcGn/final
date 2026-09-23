@@ -1,13 +1,8 @@
 #include "command_json.h"
 #include "test_support.h"
 
-/* A well-formed set_mute command addressed to the default device. */
-static const char *MUTE_COMMAND =
-    "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-    "\"requestId\":\"01K5H0M8YH1F4H4X6B62R9JB5A\",\"issuedAt\":1790246400000,"
-    "\"expiresAt\":1790246460000,\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
-
-/* A well-formed set_thresholds command. */
+/* A well-formed set_thresholds command. Also the generic parse vehicle for
+ * cases that need any valid command at all. */
 static const char *THRESHOLD_COMMAND =
     "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
     "\"requestId\":\"01K5H0PN0M1N9NB8B7RBTVWT8P\",\"issuedAt\":1790246400000,"
@@ -18,36 +13,6 @@ static const char *THRESHOLD_COMMAND =
 static CommandResult parse(const char *json, ControlCommand *command)
 {
     return CommandJsonParse(json, (uint32_t)strlen(json), "MCU001", 0U, command);
-}
-
-/* Exercise the mute command. */
-static void test_mute_command(void)
-{
-    ControlCommand command;
-    CommandResult result;
-
-    TEST_CASE("a well-formed mute command is accepted");
-    result = parse(MUTE_COMMAND, &command);
-    CHECK_INT(COMMAND_RESULT_APPLIED, result);
-    CHECK_INT(COMMAND_SET_MUTE, command.type);
-    CHECK_TRUE(command.muted);
-    CHECK_INT(0, strcmp(command.request_id, "01K5H0M8YH1F4H4X6B62R9JB5A"));
-    CHECK_INT(60000U, command.window_ms);
-    /* A mute command carries no threshold version, so the caller must not
-     * report one as confirmed. */
-    CHECK_INT(0U, command.threshold_version);
-
-    TEST_CASE("an unmute command sets the flag false");
-    {
-        const char *unmute =
-            "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-            "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":false}}";
-        result = parse(unmute, &command);
-        CHECK_INT(COMMAND_RESULT_APPLIED, result);
-        CHECK_FALSE(command.muted);
-        CHECK_INT(1000U, command.window_ms);
-    }
 }
 
 /* Exercise the threshold command. */
@@ -119,7 +84,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":2,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_SCHEMA, parse(json, &command));
     }
 
@@ -128,7 +93,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU009\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_DEVICE, parse(json, &command));
     }
 
@@ -137,7 +102,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU00\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_DEVICE, parse(json, &command));
     }
 
@@ -150,12 +115,24 @@ static void test_envelope_rejections(void)
         CHECK_INT(COMMAND_RESULT_REJECTED_TYPE, parse(json, &command));
     }
 
+    TEST_CASE("a retired set_mute command is rejected as an unknown type");
+    {
+        /* The remote-mute capability was deleted. An old client that still
+         * sends set_mute is told the type is not recognized rather than having
+         * its payload quietly reinterpreted as thresholds. */
+        const char *json =
+            "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
+            "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
+            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+        CHECK_INT(COMMAND_RESULT_REJECTED_TYPE, parse(json, &command));
+    }
+
     TEST_CASE("a telemetry message on the control topic is rejected");
     {
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"telemetry\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_TYPE, parse(json, &command));
     }
 
@@ -164,7 +141,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":2000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_RANGE, parse(json, &command));
     }
 
@@ -175,7 +152,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":86401001,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_REJECTED_RANGE, parse(json, &command));
     }
 
@@ -184,7 +161,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         /* Without a requestId there is nothing to acknowledge, so the payload is
          * counted rather than answered. */
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
@@ -195,7 +172,7 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"extra\":1,\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"extra\":1,\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -212,39 +189,19 @@ static void test_envelope_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU\\u0030\\u0030\\u0031\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
     TEST_CASE("a null argument is rejected");
     CHECK_INT(COMMAND_RESULT_MALFORMED, CommandJsonParse(NULL, 10U, "MCU001", 0U, &command));
-    CHECK_INT(COMMAND_RESULT_MALFORMED, CommandJsonParse(MUTE_COMMAND, (uint32_t)strlen(MUTE_COMMAND), "MCU001", 0U, NULL));
+    CHECK_INT(COMMAND_RESULT_MALFORMED, CommandJsonParse(THRESHOLD_COMMAND, (uint32_t)strlen(THRESHOLD_COMMAND), "MCU001", 0U, NULL));
 }
 
 /* Exercise the payload validation. */
 static void test_payload_rejections(void)
 {
     ControlCommand command;
-
-    TEST_CASE("a quoted boolean is refused");
-    {
-        /* Accepting "true" would let a client that quoted the value believe it
-         * had muted the buzzer. */
-        const char *json =
-            "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-            "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":\"true\"}}";
-        CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
-    }
-
-    TEST_CASE("a missing muted field is rejected");
-    {
-        const char *json =
-            "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
-            "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{}}";
-        CHECK_INT(COMMAND_RESULT_REJECTED_RANGE, parse(json, &command));
-    }
 
     TEST_CASE("a partial threshold set is rejected rather than partly applied");
     {
@@ -285,7 +242,7 @@ static void test_payload_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true,\"volume\":5}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80,\"volume\":5}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -294,7 +251,7 @@ static void test_payload_rejections(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":[]}";
+            "\"type\":\"set_thresholds\",\"payload\":[]}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 }
@@ -318,11 +275,11 @@ static void test_lexical_edges(void)
             "  \"requestId\": \"01REQ\",\n"
             "  \"issuedAt\": 1000,\n"
             "  \"expiresAt\": 2000,\n"
-            "  \"type\": \"set_mute\",\n"
-            "  \"payload\": { \"muted\": true }\n"
+            "  \"type\": \"set_thresholds\",\n"
+            "  \"payload\": { \"thresholdVersion\": 2, \"temperatureHighC\": 30, \"humidityHighRh\": 80, \"gasHighPpm\": 80 }\n"
             "}";
         CHECK_INT(COMMAND_RESULT_APPLIED, parse(json, &command));
-        CHECK_TRUE(command.muted);
+        CHECK_INT(COMMAND_SET_THRESHOLDS, command.type);
         CHECK_INT(0, strcmp(command.request_id, "01REQ"));
     }
 
@@ -331,7 +288,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"REQ\\/A\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_APPLIED, parse(json, &command));
         CHECK_INT(0, strcmp(command.request_id, "REQ/A"));
     }
@@ -341,7 +298,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"A\\nB\\tC\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_APPLIED, parse(json, &command));
         CHECK_INT(0, strcmp(command.request_id, "A\nB\tC"));
     }
@@ -351,7 +308,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"A\\qB\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -362,7 +319,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"0123456789012345678901234567890123\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -371,7 +328,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ,\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -380,7 +337,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":-1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -424,7 +381,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"01REQ\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true,\"note\":\"a\\\"b\"}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80,\"note\":\"a\\\"b\"}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 
@@ -433,7 +390,7 @@ static void test_lexical_edges(void)
         const char *json =
             "{\"schemaVersion\":1,\"messageType\":\"control\",\"deviceId\":\"MCU001\","
             "\"requestId\":\"\",\"issuedAt\":1000,\"expiresAt\":2000,"
-            "\"type\":\"set_mute\",\"payload\":{\"muted\":true}}";
+            "\"type\":\"set_thresholds\",\"payload\":{\"thresholdVersion\":2,\"temperatureHighC\":30,\"humidityHighRh\":80,\"gasHighPpm\":80}}";
         CHECK_INT(COMMAND_RESULT_MALFORMED, parse(json, &command));
     }
 }
@@ -444,7 +401,7 @@ static void test_window(void)
     ControlCommand command;
 
     TEST_CASE("a command inside its window is live");
-    CHECK_INT(COMMAND_RESULT_APPLIED, parse(MUTE_COMMAND, &command));
+    CHECK_INT(COMMAND_RESULT_APPLIED, parse(THRESHOLD_COMMAND, &command));
     CHECK_TRUE(CommandWithinWindow(&command, 1000U, 1000U));
     CHECK_TRUE(CommandWithinWindow(&command, 1000U, 61000U));
 
@@ -603,14 +560,17 @@ static void test_ack_payload(void)
      * to the backend as a device with no configuration. */
     CHECK_TRUE(test_json_has_number(buffer, "thresholdVersion", "4"));
 
-    TEST_CASE("a duplicate mute command reports no threshold version");
+    TEST_CASE("a result with no adopted version reports null");
     payload.result = COMMAND_RESULT_DUPLICATE;
     payload.threshold_version = 0U;
     length = CommandAckJsonEncode(&payload, buffer, sizeof(buffer));
     CHECK_TRUE(test_json_has_string(buffer, "status", "duplicate"));
     CHECK_TRUE(test_json_has_number(buffer, "thresholdVersion", "null"));
 
-    TEST_CASE("a mute acknowledgement reports no threshold version");
+    TEST_CASE("an applied command that adopted no version reports null");
+    /* Only a threshold command is applied from here on, and every one of those
+     * carries a version, so this is the shape a future non-threshold result
+     * would have to use. */
     payload.result = COMMAND_RESULT_APPLIED;
     payload.threshold_version = 0U;
     length = CommandAckJsonEncode(&payload, buffer, sizeof(buffer));
@@ -626,7 +586,6 @@ static void test_ack_payload(void)
 /* Entry point for the command_json suite. */
 void test_command_json_suite(void)
 {
-    test_mute_command();
     test_threshold_command();
     test_envelope_rejections();
     test_payload_rejections();

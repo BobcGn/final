@@ -139,7 +139,6 @@ func telemetry(mutate func(map[string]any)) []byte {
 		"gasCalibrated":    false,
 		"localAlarm":       false,
 		"alarmCauses":      []string{},
-		"buzzerMuted":      false,
 		"network":          "online",
 		"thresholdVersion": 1,
 		"sensorFault":      false,

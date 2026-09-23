@@ -12,7 +12,6 @@ import kotlin.math.roundToInt
  * curve is scaled, must not be able to differ between Android and the MiniApp
  * for the same backend state.
  */
-private const val MUTE_HINT = "静音不影响环境检测与告警上报"
 private const val SAVE_HINT = "下发后需设备确认，确认前仍按旧规则报警"
 private const val CURVE_STATUS_TEXT = "各指标按独立量程展示"
 private const val CURVE_MASK_TITLE = "三条曲线按各自量程展示"
@@ -136,14 +135,7 @@ data class DashboardView(
     val localAlarm: Boolean,
     val localAlarmText: String,
     val buzzerText: String,
-    val buzzerMuted: Boolean,
     val updatedAt: String,
-    /**
-     * Copy for the mute control, worded the way the frozen baseline words it.
-     * Both hosts render it, so the promise a user reads before tapping the button
-     * cannot differ between them.
-     */
-    val muteHint: String,
 )
 
 /**
@@ -323,8 +315,8 @@ object MonitoringPresentation {
     /**
      * Derives the dashboard from device state plus an optional latest sample.
      *
-     * `telemetry` is null when the device has no valid sample yet; alarm and
-     * mute state then fall back to [DeviceStatus] so the page stays truthful.
+     * `telemetry` is null when the device has no valid sample yet; the alarm
+     * state then falls back to [DeviceStatus] so the page stays truthful.
      */
     fun dashboard(status: DeviceStatus, telemetry: TelemetryPoint?): DashboardView {
         val risk = when (status.alarmState) {
@@ -334,7 +326,6 @@ object MonitoringPresentation {
             AlertState.recovered -> Risk("recovered", Tone.INFO, "指标已恢复", "事件归档中")
         }
         val localAlarm = telemetry?.localAlarm ?: status.localAlarm
-        val muted = telemetry?.buzzerMuted ?: status.buzzerMuted
         return DashboardView(
             deviceId = status.deviceId,
             hasData = telemetry != null,
@@ -358,13 +349,10 @@ object MonitoringPresentation {
             localAlarm = localAlarm,
             localAlarmText = if (localAlarm) "报警中" else "正常",
             buzzerText = when {
-                muted -> "已静音"
                 localAlarm -> "报警策略生效"
                 else -> "待机"
             },
-            buzzerMuted = muted,
             updatedAt = telemetry?.receivedAt ?: status.lastSeenAt ?: "--",
-            muteHint = MUTE_HINT,
         )
     }
 

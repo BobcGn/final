@@ -113,7 +113,6 @@ type DeviceState struct {
 	Connectivity  domain.Connectivity
 	AlarmState    domain.AlertState
 	ActiveAlertID string
-	BuzzerMuted   bool
 	LocalAlarm    bool
 	SensorFault   bool
 	GasCalibrated bool

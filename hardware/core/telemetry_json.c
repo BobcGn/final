@@ -103,9 +103,6 @@ uint32_t TelemetryJsonEncode(const TelemetryPayload *payload, char *buffer, uint
     JsonWriterKey(&writer, "alarmCauses");
     write_causes(&writer, payload->alarm_causes);
     JsonWriterRaw(&writer, ",");
-    JsonWriterKey(&writer, "buzzerMuted");
-    JsonWriterBool(&writer, payload->buzzer_muted);
-    JsonWriterRaw(&writer, ",");
     JsonWriterKey(&writer, "network");
     JsonWriterString(&writer, payload->network_online ? "online" : "reconnecting");
     JsonWriterRaw(&writer, ",");

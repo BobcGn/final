@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS devices (
     alarm_state                 text NOT NULL DEFAULT 'normal'
         CHECK (alarm_state IN ('normal', 'suspect', 'fire_warning', 'recovered')),
     active_alert_id             text,
-    buzzer_muted                boolean NOT NULL DEFAULT false,
     local_alarm                 boolean NOT NULL DEFAULT false,
     sensor_fault                boolean NOT NULL DEFAULT false,
     gas_calibrated              boolean NOT NULL DEFAULT false,
@@ -46,7 +45,6 @@ CREATE TABLE IF NOT EXISTS telemetry (
     gas_calibrated    boolean NOT NULL,
     local_alarm       boolean NOT NULL,
     alarm_causes      text[] NOT NULL DEFAULT '{}',
-    buzzer_muted      boolean NOT NULL,
     network           text NOT NULL CHECK (network IN ('online', 'reconnecting')),
     threshold_version integer NOT NULL CHECK (threshold_version >= 1),
     sensor_fault      boolean NOT NULL,
@@ -102,7 +100,7 @@ CREATE TABLE IF NOT EXISTS device_thresholds (
 CREATE TABLE IF NOT EXISTS device_commands (
     request_id        text PRIMARY KEY,
     device_id         text NOT NULL,
-    type              text NOT NULL CHECK (type IN ('set_mute', 'set_thresholds')),
+    type              text NOT NULL CHECK (type = 'set_thresholds'),
     state             text NOT NULL CHECK (state IN (
         'accepted', 'published', 'applied', 'rejected', 'expired',
         'duplicate', 'failed', 'timed_out', 'publish_failed')),
@@ -112,7 +110,6 @@ CREATE TABLE IF NOT EXISTS device_commands (
     published_at      timestamptz,
     completed_at      timestamptz,
     expires_at        timestamptz NOT NULL,
-    muted             boolean,
     temperature_high_c double precision,
     humidity_high_rh  double precision,
     gas_high_ppm      double precision,
@@ -122,10 +119,9 @@ CREATE TABLE IF NOT EXISTS device_commands (
     -- Exactly one payload shape per command type, so a malformed command cannot
     -- be stored and later published as a confusing mixture.
     CHECK (
-        (type = 'set_mute' AND muted IS NOT NULL)
-        OR (type = 'set_thresholds' AND temperature_high_c IS NOT NULL
-            AND humidity_high_rh IS NOT NULL AND gas_high_ppm IS NOT NULL
-            AND desired_version IS NOT NULL)
+        temperature_high_c IS NOT NULL
+        AND humidity_high_rh IS NOT NULL AND gas_high_ppm IS NOT NULL
+        AND desired_version IS NOT NULL
     )
 );
 

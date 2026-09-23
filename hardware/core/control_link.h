@@ -14,7 +14,7 @@
  * It performs no I/O. The caller owns the radio, the clock and the buffers, and
  * receives one callback per decoded frame carrying whatever that frame owes the
  * wire. That is what lets every safety-relevant branch — topic matching, schema
- * and range validation, deduplication, expiry and the mute and threshold
+ * and range validation, deduplication, expiry and the threshold
  * decisions — be exercised on a host without a board.
  *
  * Two acknowledgements are produced and they are not interchangeable:
@@ -139,7 +139,7 @@ typedef struct
 /* Bind the path to the device identity and to the state a command acts on.
  *
  * `monitor` and `store` are borrowed and must outlive the link. Both are
- * required: the mute command writes the monitor's mute flag, and a threshold
+ * required: a threshold
  * command is only reported as applied after the store has written and verified
  * the record. */
 void ControlLinkInit(ControlLink *link, const char *device_id, const char *boot_id,

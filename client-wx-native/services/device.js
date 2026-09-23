@@ -57,18 +57,6 @@ function putThresholds(deviceId, payload) {
   })
 }
 
-/**
- * 蜂鸣器静音/恢复：POST /api/v1/devices/{id}/commands/mute
- * 契约要求携带 Idempotency-Key；静音只抑制蜂鸣器，不影响采样上报。
- */
-function muteBuzzer(deviceId, muted) {
-  return call('/api/v1/devices/' + deviceId + '/commands/mute', {
-    method: 'POST',
-    data: { muted: !!muted },
-    header: { 'Idempotency-Key': genIdempotencyKey() },
-  })
-}
-
 module.exports = {
   getStatus,
   getLatestTelemetry,
@@ -76,5 +64,4 @@ module.exports = {
   getAlerts,
   getThresholds,
   putThresholds,
-  muteBuzzer,
 }
