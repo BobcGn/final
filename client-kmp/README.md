@@ -226,8 +226,9 @@ cd client-kmp
 
 | 项目 | 结果 |
 | --- | --- |
-| `:shared:testAndroidHostTest` | 106 tests，0 failures |
-| `:shared:miniappTest`（Node/JS） | 107 tests，0 failures |
+| `:shared:testAndroidHostTest` | 134 tests，0 failures |
+| `:shared:miniappTest`（Node/JS） | 135 tests，0 failures |
+| MiniApp 单元测试（`trend-renderer.test.js` + `trend-request.test.js`） | 13 tests，0 failures |
 | `:shared:koverVerify` | PASS（80% 行覆盖下限） |
 | 共享业务逻辑行覆盖率 | **527 / 529 行（99.6%）**；本轮新增/修改的类型均为 100% |
 | `:shared:checkMiniAppHostBoundary` | PASS |
@@ -316,6 +317,74 @@ MiniApp 侧目前只有 `:shared:miniappTest`（JS 运行时）与 `checkMiniApp
 在 DevTools 中开启服务端口后执行 `automator.launch({projectPath: 'client-kmp/miniApp'})` 即可。
 
 **后端契约状态**：后端主线已完成字段修复（PR #20 已合入 `main`），`GET /alerts` 返回的 `evidence` 对象严格遵循 `docs/api/openapi.yaml` 与 `backend/docs/api.md` 规范输出 camelCase（`gasAdcRise`、`sampleCount`…）。KMP 共享层运行时已按规范对齐并正确解析，代码与契约已解除阻塞；但本轮修复未重新在真机/模拟器进行端到端渲染复验。
+
+### MiniApp 趋势页首次加载卡顿与布局错位根因修复（2026-09-23）
+
+#### 1. 问题现象与复现链路
+- **现象**：首次进入 MiniApp 趋势页或切换时间窗后，折线图呈现严重卡顿，曲线、图例和卡片容器位置出现错乱偏移；页面向下滚动后才恢复正常位置与布局。
+- **复现路径**：
+  1. 页面冷启动首次打开进入趋势页；
+  2. 或在趋势页点击切换「近1小时 / 近6小时 / 近24小时」时间窗。
+
+#### 2. 根因分析与关键尺寸对比
+通过代码与生命周期排查，根本原因由三部分叠加导致：
+1. **同层原生节点（Same-Layer Canvas 2D）与 Webview 首帧排版不同步（关键尺寸错位）**：
+   - 旧代码在 `onRange` 切换窗口时执行了 `this.setData({ trends: null })`，将整个包含 `<canvas type="2d">` 的 `<block wx:if="{{trends && trends.hasData}}">` DOM 节点从视图树上完全销毁。
+   - 数据返回后通过 `this.setData({ trends })` 重新挂载节点，但在 Webview 的 reflow/layout（样式重排与容器高度计算）尚未完成时，紧随其后的 `createSelectorQuery().fields({ node: true, size: true })` 查询就已经返回。
+   - 此时 Canvas 获取到的尺寸为 HTML/小程序默认兜底尺寸 **300px × 150px**，而外层容器卡片的真实渲染尺寸为 **317px × 180px**（基于 375px 基准屏宽）。
+   - 微信同层渲染机制把客户端 Native View 附加到该 Webview 位置时，其绝对坐标和尺寸均按尚未完成重排的错误几何计算，导致曲线和容器位置错乱。用户向下滚动页面时，触发了 Webview 的 scroll 重排和 native-to-webview 帧对齐同步，从而表现为“向下滚动后才恢复”。
+2. **单帧 600 次逐点 `arc` 绘制导致严重卡顿**：
+   - 旧绘制逻辑在 3 条指标曲线（每条最多 200 个数据点，共 600 个点）上对每个点都独立调用一次 `ctx.beginPath(); ctx.arc(); ctx.fill();`。跨 JS-Native Bridge 的高频调用阻塞了 JS 线程与渲染线程，造成肉眼可见的明显卡顿和掉帧。
+3. **图例在窄屏容器未自适应折行**：
+   - `.legend` 样式未配置 `flex-wrap`，导致小屏设备下图例文本与指标标签挤压、换行重叠。
+
+#### 3. 修复方案
+1. **抽离独立渲染与协调器模块（`trend-renderer.js`）**：
+   - **布局就绪判定（`isLayoutReady`）**：严格校验测量尺寸 `width > 0 && height > 0`，未就绪时阻止任何绘制。
+   - **双缓冲排队机制（`createTrendCoordinator`）**：使用 `wx.nextTick` 保证在 Webview 重排完成后再执行布局测量；若首帧仍未就绪则在微任务队列等待就绪，彻底杜绝 300×150 兜底尺寸下的脏绘制。
+2. **保持 Canvas DOM 存活，避免同层节点反复销毁挂载**：
+   - `onRange` 切换时不再将 `trends` 设为 `null` 摧毁 Canvas 节点，而是调用 `clearCanvas` 仅清空位图内容，从根本上杜绝 Native View 重新绑定时的帧不同步抖动。
+3. **单路径连线与稀疏孤立点绘制优化**：
+   - 连续数据段采用单路径 `ctx.stroke()` 批量绘制折线，只有断点处的单点才绘制圆点，单帧跨 Bridge 绘制调用从 600 次锐减至个位数指令。
+4. **规范化设备像素比（DPR）变换矩阵**：
+   - 使用 `ctx.setTransform(dpr, 0, 0, dpr, 0, 0)` 显式设定缩放，替代累计调用 `ctx.scale()`，彻底消除多次重绘引起的矩阵累乘失真。
+5. **图例样式自适应优化**：
+   - `.legend` 增加 `flex-wrap: wrap; gap: 12rpx 24rpx;`，保障不同屏幕尺寸下均能正确换行排版。
+
+#### 4. 自动化回归测试（5 组场景）
+在 `client-kmp/miniApp/pages/monitor/trend-renderer.test.js` 中构建了 5 组针对性回归测试：
+1. **首次布局未就绪拦截**：当容器尺寸为 0×0 或未就绪时，拦截绘制调用，防止以 300×150 脏绘制。
+2. **尺寸就绪后首次正确绘制**：容器尺寸就绪（317×180）后执行几何计算，使用 `setTransform` 设定 DPR，且无 600 次逐点 arc 循环。
+3. **时间窗快速切换时序竞争**：用户快速点击不同时间窗（如 1h -> 6h -> 24h）时，过期的旧网络请求回调被 Gate 机制废弃，不会覆盖最新的图表数据。
+4. **页面离开（切出/卸载）安全防护**：用户离开趋势页或卸载页面后，未决的异步回调被安全丢弃，不发生空指针或非法上下文操作。
+5. **页面二次进入（onShow）重绘**：从后台或子页面返回趋势页时，正常触发完整重绘，变换矩阵重置不累乘。
+
+#### 5. 测试命令与执行结果
+```bash
+# 1. MiniApp 趋势页单元与回归测试（Node 纯 JS 环境）
+node --test client-kmp/miniApp/pages/monitor/trend-request.test.js client-kmp/miniApp/pages/monitor/trend-renderer.test.js
+# 结果：13/13 tests pass (108ms)
+
+# 2. 共享层与 MiniApp 运行时测试（Gradle）
+./gradlew --no-configuration-cache :shared:testAndroidHostTest :shared:miniappTest
+# 结果：Android 134 tests PASS，MiniApp JS 135 tests PASS
+
+# 3. 架构边界与自包含检查
+./gradlew --no-configuration-cache checkMiniAppHostSelfContained :shared:checkMiniAppHostBoundary
+# 结果：miniApp/ is self-contained: 10 bundle files, no external requires. PASS.
+
+# 4. Kover 覆盖率验证
+./gradlew --no-configuration-cache :shared:koverXmlReport :shared:koverVerify
+# 结果：PASS（共享层业务逻辑覆盖率 > 80%）
+
+# 5. 全量 Gradle 检查
+./gradlew --no-configuration-cache check
+# 结果：BUILD SUCCESSFUL
+```
+
+#### 6. 视觉验收状态说明（重要）
+> [!WARNING]
+> **微信运行时视觉验收未完成**：本机微信开发者工具 CLI 服务端口未开启（执行 CLI 报错 code 246: `IDE service port disabled`），无法在无 TTY 的环境下自动启动开发者工具并捕获真机/模拟器运行时同层渲染截图。因此，本轮单元测试通过与 Gradle 构建通过仅代表逻辑、时序与布局算法已完成验证，**不能直接等同于微信客户端同层原生渲染的最终视觉验收**。视觉验收需在人工开启开发者工具「安全设置 → 服务端口」后，通过 DevTools GUI 或 `miniprogram-automator` 实机抓图确认。
 
 ## 六、当前不支持 / 未完成
 
