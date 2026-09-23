@@ -11,9 +11,9 @@
 | 真实设备 → EMQX → Go → PostgreSQL → REST | 实物开发板 + 上述镜像 | **已验证**（2026-09-21）；WebSocket 路由自动化测试覆盖 |
 | 云端命令 → 设备 ACK | 模拟设备即可 | **已验证**（模拟设备侧），见 §3 |
 | 真实设备遥测 → EMQX → Backend → PostgreSQL | 实物开发板 + 手机热点 | **已执行**（2026-09-21）：`MCU001` 完成 MQTT 上报，REST 可查且 `postgres-dev.telemetry` 已落库 |
-| 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **未执行**：已订阅控制主题，但命令应用与 ACK 尚未接入主循环 |
-| 断网自治（本地采样/判断/声光不依赖网络） | 实物开发板 | **未执行**，见 §6 |
-| 阈值掉电恢复 | 实物开发板（或 Flash 模拟） | 逻辑**已验证**（主机测试覆盖断电截断、擦除失败、单字节翻转），硬件路径未验证 |
+| 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **已验证**（2026-09-22，见 §7.1） |
+| 断网自治（本地采样/判断/声光不依赖网络） | 实物开发板 | **已验证**（2026-09-22，停 EMQX 场景，见 §6 第 2 项）；拔掉 AP 的更强场景未测 |
+| 阈值掉电恢复 | 实物开发板（或 Flash 模拟） | 逻辑**已验证**（主机测试覆盖断电截断、擦除失败、单字节翻转）；硬件路径**部分验证**（2026-09-22 复位后保持，真实拔电未做，见 §6 第 3 项） |
 | 复合火警误报边界 | 调参记录 + 现场数据 | **未评估**：参数为实施方案文档初值 |
 
 ## 2. 结论摘要（当前可复现的部分）
@@ -171,7 +171,7 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 - `PUT /thresholds` → `applied`、`confirmedVersion` 前进，复位后 Flash 记录仍在（详见 §6 第 3 项）。
 - 停止 EMQX 后设备失去 Broker 但本地报警继续（§6 第 2 项）；重启 EMQX 后设备**无需复位**自行重连并恢复上报（`bootId` 不变、`sequence` 续增）。
 
-**本轮暴露、尚未修复的 Backend 侧缺陷**：Backend 的 MQTT 会话每 30 秒断开一次（`connection lost: EOF`，与 keepalive 周期一致，日志可见 `reconnecting` 与 `mqtt connected` 交替），导致控制命令的 REST 调用约一半概率返回 503 `broker_unavailable`（`mqtt: not connected`）。设备侧路径本身已验证通过；该缺陷属 Backend 模块，需单独分支修复后才能把「命令下发成功率」列为验收项。
+**本轮暴露的 Backend 侧缺陷**：曾出现 MQTT 会话每 30 秒断开一次（`connection lost: EOF`，与 keepalive 周期一致，日志可见 `reconnecting` 与 `mqtt connected` 交替），导致控制命令的 REST 调用约一半概率返回 503 `broker_unavailable`（`mqtt: not connected`）。该缺陷已由 PR #21（`fix/backend-mqtt-session-stability`）修复合入 main。遗留项：Broker 重启后 Backend 侧控制命令发布的独立缺陷（Backend 模块，另立分支）——在该项修复前不把「Broker 重启场景下的命令下发成功率」列为验收项。
 
 ## 8. 未覆盖风险
 
@@ -179,7 +179,7 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 | --- | --- | --- |
 | EMQX 生产安全未验证 | 本地 ACL 已运行，但尚无 TLS 和独立设备凭据 | 正式部署前增加 TLS、凭据轮换和方向隔离安全测试 |
 | 误报率未知 | 预警参数（150 ADC / 3 °C·min⁻¹）来自实施方案文档初值 | 记录触发证据并留出整定时间；用 `-scenario warm-up` 复现预期触发路径 |
-| 真机验收不完整 | OLED、MQ135、ESP8266 已上电；DHT11 仍有时序故障，蜂鸣器需听感确认 | §6 |
+| 真机验收不完整 | DHT11 短时读数与蜂鸣器发声已通过（2026-09-21/22）；仍未做：DHT11 连续 1 小时失败率、MQ135 标定、真实拔电 | §6、`hardware/README.md` 已知限制 |
 | PostgreSQL 集成测试默认跳过 | 未设 `TEST_DATABASE_URL` 时跳过 | CI 必须提供该变量，否则数据库路径实际覆盖为零 |
 | 未同步时钟设备的时间语义 | `timestamp` 为 `null` 时后端以 `receivedAt` 排序 | 契约已规定；`-unsynced-clock` 可复现 |
 | 鉴权粒度 | 只有"有 token/无 token"，无用户-设备授权与操作分权 | `AUTH_MODE=none` 不得用于不可信网络；见 `backend/docs/api.md` §1.3 |

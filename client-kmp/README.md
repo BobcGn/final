@@ -200,8 +200,8 @@ cd client-kmp
 # MiniApp 运行时不得携带 Compose/Skiko
 ./gradlew --no-configuration-cache :shared:checkMiniAppHostBoundary
 
-# 微信工程自包含 + 入口文件存在 + 「只有设备 ACK 才算成功」的闸门仍在（root 工程任务）
-./gradlew --no-configuration-cache prepareMiniAppHost
+# 微信工程自包含 + 入口文件存在 + 「只有设备 ACK 才算成功」的闸门（root 工程任务）
+./gradlew --no-configuration-cache checkMiniAppHostSelfContained
 
 # 覆盖率报告（Kover）；koverVerify 对共享逻辑执行 80% 行覆盖下限
 ./gradlew --no-configuration-cache :shared:koverXmlReport :shared:koverVerify
@@ -216,7 +216,8 @@ cd client-kmp
 > 任务名注意：本仓库**没有** `:shared:jsNodeTest` 任务。JS/Node 侧的测试任务名是
 > `:shared:miniappTest`（其执行器是 `:shared:miniappNodeTest`）。另外
 > `checkMiniAppHostBoundary` 是插件任务，而更严格的「微信工程自包含 + toast 闸门」
-> 检查是 root 工程的 `checkMiniAppHostSelfContained`，由 `prepareMiniAppHost` 触发。
+> 检查是 root 工程的 `checkMiniAppHostSelfContained`（它 `dependsOn` `prepareMiniAppHost`；单独执行
+> `prepareMiniAppHost` 只做同步，不会运行闸门）。
 
 覆盖率口径：仅统计 `org.example.client_kmp.monitoring`（两端共同的业务规则），
 排除编译器生成的嵌套类。Compose 页面、WXML Host 与生成 bundle 属于 Host 代码，
@@ -262,7 +263,7 @@ Android 平台测试对真实 loopback HTTP 服务发起请求，覆盖 `HttpURL
 
 ## 五、与微信原生 baseline 的对齐
 
-`client-wx-native` 是**视觉与交互 baseline**：四个页面的信息结构、标题/副标题、暗色背景与薄荷绿强调色、卡片圆角与间距、字号层级、底部四项导航与选中态都按它对齐。本轮以它为准的项目：
+`client-wx-native` 是**视觉与交互 baseline**：四个页面的信息结构、标题/副标题、暗色背景与薄荷绿强调色、卡片圆角与间距、字号层级、底部四项导航与选中态都按它对齐（对齐以 Android 端四页为准；KMP 的 MiniApp 宿主当前只有 `pages/monitor` 一页，见 `miniApp/app.json`）。本轮以它为准的项目：
 
 - 趋势页：`近1小时 / 近6小时 / 近24小时` 时间窗选择器（驱动查询的 `from`/`to` 绝对边界）、温度/湿度/气体三张统计卡（平均为数字、最低、最高、**峰值时间**）、以及**曲线图区**——图例 + 四条网格线 + Canvas 折线图 + 两端轴标签。
 - 告警页：`全部 / 火情 / 疑似 / 已恢复` 筛选条；卡片为「状态头 + 触发证据面板（2×2）+ 恢复行」。
@@ -294,11 +295,12 @@ GET /api/v1/devices/MCU001/telemetry
 
 `order=desc` 是有意的：只给 `limit` 会返回区间内**最早**的那些行，于是「近24小时」描述的是它开头的几分钟，却被当成整段区间。取到之后在共享层反转为时间升序，统计与展示都按升序读。
 
-**已知边界**：契约没有聚合端点，一个窗口内的样本数可能超过一页（设备每 5 秒上报，一小时就有约 720 行，而页面大小是 200）。因此统计描述的是**该窗口内最近一页**的样本，不是窗口内全部样本；「共 N 条样本」里的 N 是这一页的行数。要覆盖整个窗口需要聚合端点。
+**已知边界**：契约没有聚合端点，一个窗口内的样本数可能超过一页（按契约 5 秒周期一小时约 720 行、当前固件名义 1 秒则更多——见 `docs/device-protocol.md` §5.2——而页面大小是 200）。因此统计描述的是**该窗口内最近一页**的样本，不是窗口内全部样本；「共 N 条样本」里的 N 是这一页的行数。要覆盖整个窗口需要聚合端点。
 
 ### 实机/模拟器验证结果（2026-09-22）
 
 **Android 模拟器**（Pixel_9_Pro，1280×2856，480dpi，`http://10.0.2.2:8080` 连本机 Backend）：
+（下表「截图」列为验收时的本地文件名，**未提交入库**——仓库不含 `android-*.png`；核对结论以文字记录为准。）
 
 | 页面 | 截图 | 核对结果 |
 | --- | --- | --- |

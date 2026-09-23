@@ -6,24 +6,14 @@
 
 业务页面开发已启动：包含实时监控（dashboard）、历史趋势（trends）、告警记录（alerts）、阈值设置（settings）四个 tab 页，以及公共网络层（services/）与工具函数（utils/）。底部导航图标位于 assets/icons/。
 
-后端除 `GET /healthz` 外所有路由尚未实现（返回 501）。当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（services/mock/），Mock 响应字段与 api 契约一致；后端就绪后将 `useMock` 置为 `false` 即可切换真实接口，页面代码无需改动。原示例页（index/logs）已移除。
+后端全部路由已实现（2026-09-22，见 `backend/README.md`）。当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（services/mock/），Mock 响应字段与 api 契约一致；联调时将 `useMock` 置为 `false` 即可切换真实接口，页面代码无需改动。原示例页（index/logs）已移除。
 
 ## Project Boundary
 
 - 后续与 KMP 客户端实现相同业务能力，并使用相同 Backend API、硬件数据源和验收场景。
 - 保持微信原生工程方式和真实开发成本，不为了匹配 KMP 目录结构而人为改造。
 - 不依赖 `client-kmp` 的内部实现；跨客户端只共享已确认的外部契约和需求事实。
-- 历史趋势折线图已接入原生 Canvas 2D 实现，支持温度、湿度、气体三指标独立 Y 轴缩放（带 10% padding）、气体缺失（null）打断折线段（非零化）、时间比例 X 轴分布以及最多 200 条样本绘制。
-- 单元测试使用 Node.js 原生测试运行器：`node --test tests/trend-chart.test.js`。
-- WebSocket 实时订阅与告警确认在后续阶段补齐。
-
-## Testing & Verification
-
-```sh
-cd client-wx-native
-node --test tests/trend-chart.test.js
-node --check utils/trend-chart.js pages/trends/trends.js services/mock/mock.js
-```
+- WebSocket 实时订阅已实现（`services/socket.js`：Envelope 解析、eventId 去重、断线重连与 REST 兜底）；ECharts 折线图与单元测试在后续阶段补齐。
 
 使用微信开发者工具打开本目录即可运行。`project.config.json` 中已有项目配置与团队确认的 AppID；`project.private.config.json` 等本机私有文件不得提交。
 

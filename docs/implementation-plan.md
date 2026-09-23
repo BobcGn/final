@@ -4,7 +4,7 @@
 
 系统面向机房或实验室微环境，完成温湿度与气体浓度采集、本地断网自治报警、联网遥测、复合火情预警、历史查询和远程控制。核心安全原则是：云端能力增强监控，但不能成为本地报警的前置条件。
 
-本方案定义可分阶段实现的工程边界，不表示仓库已经具备全部能力。当前阶段只落地事实文档、Backend 路由契约和可测试骨架。
+本方案定义可分阶段实现的工程边界，不表示仓库已经具备全部能力。各阶段实际进度以根 README、[integration-testing.md](integration-testing.md) 与 `hardware/README.md` 的验收记录为准：截至 2026-09-22，契约、硬件本地闭环、MQTT 联调与 Backend 数据链路已完成实机验收，客户端与系统验收仍在推进。
 
 ## 2. 仓库现状与目标态
 
@@ -94,11 +94,13 @@ STM32F103C8T6 没有内部 EEPROM，可使用保留 Flash 页模拟配置存储�
 magic | schemaVersion | sequence | temperatureHighC | gasHighPpm | crc32
 ```
 
+（以上为初版草案；实际落地格式把 `sequence` 实现为 `version`，并增加了湿度与上升阈值字段，以 `hardware/README.md`「阈值掉电保存」为准。）
+
 采用双槽/双页和递增 sequence，写入新记录并校验成功后再使其生效。收到控制命令时先验证范围与版本，再写 Flash；写入失败继续使用上一次有效配置。避免每次遥测或滑块拖动都写 Flash，Backend 应对连续操作做合并或确认提交。
 
 ### 4.5 ESP8266 MQTT 路径
 
-优先评估模块 AT 固件是否支持 MQTT 指令集。若支持，可使用 `AT+MQTTUSERCFG`、连接、订阅和发布相关指令；若不支持，再评估在 MCU 上实现轻量 MQTT 编解码。无论采用哪条路径，都应复用现有 USART 中断接收、超时、重试和状态解析思路。
+优先评估模块 AT 固件是否支持 MQTT 指令集。若支持，可使用 `AT+MQTTUSERCFG`、连接、订阅和发布相关指令；若不支持，再评估在 MCU 上实现轻量 MQTT 编解码。**实际选型**：因无法确认目标模组的 AT 固件版本，MQTT 指令集路径被排除，最终在 MCU 侧实现 MQTT 编解码，理由见 `hardware/README.md`「MQTT 接入设计」。无论采用哪条路径，都应复用现有 USART 中断接收、超时、重试和状态解析思路。
 
 当前 TCP 文本协议不得在 MQTT 未经实机验证前删除。迁移验收至少覆盖冷启动、AP 不存在、密码错误、Broker 重启、断网恢复、下发重复命令和超长 Payload。
 
@@ -124,7 +126,7 @@ Payload 中必须携带 `deviceId`，详细 Schema、QoS、保留策略、示例
 - Command publisher：发布静音和阈值命令，关联 `requestId` 与设备确认。
 - HTTP/WebSocket：遵守 OpenAPI 和实时消息契约。
 
-数据库与 MQTT 客户端尚未选型或引入。建议先完成接口和算法的纯 Go 单元测试，再选择驱动。
+数据库与 MQTT 客户端已选型：PostgreSQL（`postgres-dev` 容器，接入见 `backend/internal/store`）与 EMQX 5.8（`deploy/compose.yaml`，接入见 `backend/internal/mqtt`）。接口和算法保持纯 Go 单元测试，驱动层单独验证。
 
 ### 6.2 复合预警算法
 
@@ -138,8 +140,10 @@ temperatureRate = linearSlope(temperature, eventTime) × 60  // ℃/min
 只有当 `gasRise >= gasRiseThreshold` 且 `temperatureRate >= temperatureRateThreshold`，并持续满足最小确认时长/样本数时，才进入 `fire_warning`。状态机建议为：
 
 ```text
-normal → suspect → fire_warning → acknowledged → recovered
+normal → suspect → fire_warning → recovered
 ```
+
+原方案含 `acknowledged` 状态；首期没有告警确认接口，保留它会形成无法产生的契约，故首期冻结范围不含该状态，留作二期（见 [device-protocol.md](device-protocol.md) FD-9 与 `docs/api/openapi.yaml` 的 `AlertState` 说明）。
 
 算法必须处理乱序、重复、缺失和设备重启数据；使用设备时间参与趋势计算，同时保存服务端 `receivedAt`。每个告警事件记录起止时间、峰值、斜率、触发阈值和原始样本引用，便于解释和答辩。
 
@@ -178,11 +182,11 @@ REST 与 WebSocket 路径见 [api/openapi.yaml](api/openapi.yaml)。两套客户
 
 ## 9. 分阶段计划与验收
 
-1. **契约阶段（当前）**：事实文档、路由、OpenAPI、协议草案、Git 基线。
-2. **硬件本地闭环**：滑动平均、OLED 轮播、断网报警、Flash 配置单元与实机测试。
-3. **MQTT 联调**：EMQX、遥测发布、控制订阅、命令确认和断线恢复。
-4. **Backend 数据链路**：消费、校验、PostgreSQL、在线状态、算法测试。
-5. **客户端**：先原生微信 baseline，再 KMP 方案；按同一验收脚本实现。
-6. **系统验收**：断网自治、误报抑制、端到端延迟、历史查询、远程控制确认和两客户端对照。
+1. **契约阶段（已完成）**：事实文档、路由、OpenAPI、协议草案、Git 基线。
+2. **硬件本地闭环（已完成）**：滑动平均、OLED 轮播、断网报警、Flash 配置单元与实机测试。
+3. **MQTT 联调（已完成）**：EMQX、遥测发布、控制订阅、命令确认和断线恢复。
+4. **Backend 数据链路（已完成）**：消费、校验、PostgreSQL、在线状态、算法测试。
+5. **客户端（进行中）**：先原生微信 baseline，再 KMP 方案；按同一验收脚本实现。
+6. **系统验收（进行中）**：断网自治、误报抑制、端到端延迟、历史查询、远程控制确认和两客户端对照——其中断网自治与远程控制确认已取得实机证据（2026-09-22），误报抑制与两客户端对照未做。
 
 所有成员与 Agent 按根 `AGENTS.md` 使用 Multica CLI 同步对应 issue 的进度、验证、风险和跨模块变更。

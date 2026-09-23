@@ -22,6 +22,7 @@ paths:
     get:
       operationId: getHealth
       tags: [health]
+      security: []
       summary: Check process liveness
       description: >-
         Process-level liveness only. It does not check the database, the MQTT
@@ -56,8 +57,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/telemetry/latest:
     get:
       operationId: getLatestTelemetry
@@ -84,8 +83,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/telemetry:
     get:
       operationId: listTelemetry
@@ -93,7 +90,7 @@ paths:
       summary: Query historical telemetry
       description: >-
         Ascending event-time order is the default. Ordering and the pagination
-        cursor use the stable key (eventTime, bootId, sequence, id) so that
+        cursor use the stable key (eventTime, bootId, sequence) so that
         equal timestamps cannot skip or duplicate rows. The maximum query span
         is 31 days; longer ranges need aggregation or an export job.
       parameters:
@@ -118,8 +115,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/alerts:
     get:
       operationId: listAlerts
@@ -155,8 +150,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/thresholds:
     get:
       operationId: getThresholds
@@ -183,8 +176,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
     put:
       operationId: updateThresholds
       tags: [thresholds]
@@ -221,8 +212,6 @@ paths:
           $ref: '#/components/responses/VersionConflict'
         '422':
           $ref: '#/components/responses/InvalidThreshold'
-        '429':
-          $ref: '#/components/responses/RateLimited'
         '503':
           $ref: '#/components/responses/BrokerUnavailable'
   /api/v1/devices/{deviceId}/commands/mute:
@@ -260,8 +249,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/VersionConflict'
-        '429':
-          $ref: '#/components/responses/RateLimited'
         '503':
           $ref: '#/components/responses/BrokerUnavailable'
   /api/v1/devices/{deviceId}/commands/{requestId}:
@@ -297,8 +284,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /ws/v1/devices/{deviceId}/telemetry:
     get:
       operationId: streamDeviceTelemetry
@@ -324,6 +309,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/RateLimited'
 components:
   securitySchemes:
     BearerAuth:
@@ -349,7 +336,7 @@ components:
       in: header
       required: true
       description: >-
-        Repeating the same user, device, route and key with the same payload
+        Repeating the same device and key with the same payload
         returns the same command result and never publishes a second command.
         The same key with a different payload is a 409 version_conflict.
         Recommended value: UUID or ULID.
@@ -433,7 +420,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     RateLimited:
-      description: Too many query or control requests
+      description: The realtime stream is at capacity (MAX_WS_CLIENTS); only the WebSocket route returns this
       content:
         application/json:
           schema:

@@ -9,8 +9,8 @@ Integration environment for the acceptance run.
 
 **Nothing here is a production deployment.** The Broker credentials are local
 examples. The database password remains in the existing `postgres-dev` container;
-do not commit it. Initialize `lab` with `backend/database/bootstrap.sql` as
-described in `backend/README.md` before running the integration scenario.
+do not commit it. Initialize `lab` with `../backend/database/bootstrap.sql` as
+described in `../backend/README.md` before running the integration scenario.
 
 The EMQX 5.8 container and file ACL were exercised during the 2026-09-21 hardware
 acceptance run. The device and backend connected with separate usernames and the

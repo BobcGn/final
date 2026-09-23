@@ -1,9 +1,9 @@
 # 微信小程序界面 ↔ Backend API 对照表
 
 > 面向对象：Backend / 微信端开发者。用于核对「界面上的每个区块吃哪条接口、哪个字段」。
-> 事实源：[`api.md`](api.md)（draft-v1）、[`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)
+> 事实源：[`api.md`](api.md)（v1.0.0，已冻结）、[`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)
 > 前端实现：`client-wx-native/`，数据统一经 `services/device.js`（REST 门面）与 `services/socket.js`（实时流）
-> 当前状态：Backend 除 `GET /healthz` 外均返回 `501`；前端 `config/env.js` 的 `useMock: true`，全部走本地 Mock（REST 与实时事件均由 Mock 提供）。
+> 当前状态：Backend 全部路由已实现（2026-09-22，见 [`api.md`](api.md) §2）；前端 `config/env.js` 的 `useMock` 仍为 `true`，默认全部走本地 Mock（REST 与实时事件均由 Mock 提供），联调时改为 `false` 即切到真实接口。
 
 ---
 
@@ -12,14 +12,14 @@
 | # | 接口 | 前端方法 | 使用页面 | 后端现状 | 前端现状 |
 |---|---|---|---|---|---|
 | 1 | `GET /healthz` | 未接入 | — | Implemented | — |
-| 2 | `GET /api/v1/devices/{id}/status` | `deviceService.getStatus()` | 监控页 | 501 | 已接入 |
-| 3 | `GET /api/v1/devices/{id}/telemetry/latest` | `deviceService.getLatestTelemetry()` | 监控页（补数/兜底） | 501 | 已接入 |
-| 4 | `GET /api/v1/devices/{id}/telemetry` | `deviceService.getTelemetryHistory()` | 趋势页 | 501 | 已接入 |
-| 5 | `GET /api/v1/devices/{id}/alerts` | `deviceService.getAlerts()` | 告警页 | 501 | 已接入 |
-| 6 | `GET /api/v1/devices/{id}/thresholds` | `deviceService.getThresholds()` | 设置页 | 501 | 已接入 |
-| 7 | `PUT /api/v1/devices/{id}/thresholds` | `deviceService.putThresholds()` | 设置页保存 | 501 | 已接入 |
-| 8 | `POST /api/v1/devices/{id}/commands/mute` | `deviceService.muteBuzzer()` | 监控页远程静音 | 501 | 已接入 |
-| 9 | `GET /ws/v1/devices/{id}/telemetry` | `socket.connect()` | 监控页 / 告警页 / 设置页 | 501 | **已接入** |
+| 2 | `GET /api/v1/devices/{id}/status` | `deviceService.getStatus()` | 监控页 | Implemented | 已接入 |
+| 3 | `GET /api/v1/devices/{id}/telemetry/latest` | `deviceService.getLatestTelemetry()` | 监控页（补数/兜底） | Implemented | 已接入 |
+| 4 | `GET /api/v1/devices/{id}/telemetry` | `deviceService.getTelemetryHistory()` | 趋势页 | Implemented | 已接入 |
+| 5 | `GET /api/v1/devices/{id}/alerts` | `deviceService.getAlerts()` | 告警页 | Implemented | 已接入 |
+| 6 | `GET /api/v1/devices/{id}/thresholds` | `deviceService.getThresholds()` | 设置页 | Implemented | 已接入 |
+| 7 | `PUT /api/v1/devices/{id}/thresholds` | `deviceService.putThresholds()` | 设置页保存 | Implemented | 已接入 |
+| 8 | `POST /api/v1/devices/{id}/commands/mute` | `deviceService.muteBuzzer()` | 监控页远程静音 | Implemented | 已接入 |
+| 9 | `GET /ws/v1/devices/{id}/telemetry` | `socket.connect()` | 监控页 / 告警页 / 设置页 | Implemented | **已接入** |
 
 路径中的 `{id}` 必须匹配 `^[A-Za-z0-9_-]{1,32}$`（契约 §1.5），当前前端固定使用 `MCU001`。
 所有请求体/响应体字段名遵循 lower camel case，时间使用 UTC RFC 3339。
@@ -44,7 +44,7 @@
 | UI 元素 | 接口 | 字段 / 取值 | 代码位置 |
 |---|---|---|---|
 | 小标题「系统风险状态」 | 无 | 静态 | — |
-| 圆点颜色 + 大字（环境正常 / 疑似异常 / 火情预警 / 告警已确认 / 指标已恢复） | **接口 2**，或 **接口 9** `alert.state_changed` 后触发补数 | `alarmState`：`normal｜suspect｜fire_warning｜acknowledged｜recovered` | `ALARM_STATE` 映射表 → `applyStatus()` |
+| 圆点颜色 + 大字（环境正常 / 疑似异常 / 火情预警 / 指标已恢复） | **接口 2**，或 **接口 9** `alert.state_changed` 后触发补数 | `alarmState`：`normal｜suspect｜fire_warning｜recovered`（首期无 `acknowledged`，见契约 FD-9；前端映射表中的「告警已确认」为遗留项，后端不会产生） | `ALARM_STATE` 映射表 → `applyStatus()` |
 | 右侧胶囊（在线 / 离线 / 未知） | **接口 2**，或 **接口 9** `device.status_changed` 后触发补数 | `connectivity`：`online｜offline｜unknown` | `CONNECTIVITY` 映射表 |
 | 下方说明文字 | **接口 2** | 由 `alarmState` 派生的语义说明 | `ALARM_STATE[x].sub` |
 
@@ -120,7 +120,7 @@
 
 注意事项：
 - `cursor` 出现时，`from/to/order` 必须与第一页一致（契约 §6）；
-- 单次查询跨度建议 ≤ 31 天，更长区间应走聚合接口或导出任务。
+- 单次查询跨度上限 31 天（`MaxQuerySpan`，超出直接返回 400 `invalid_request`）；更长区间应走聚合接口或导出任务。
 
 ---
 
@@ -131,12 +131,12 @@
 | UI 元素 | 接口 | 参数 / 字段 |
 |---|---|---|
 | 筛选：全部 | **接口 5** | 不带 `state`；**当前为前端本地过滤** |
-| 筛选：火情 / 已确认 / 已恢复 | **接口 5** | 建议改为服务端 `state=fire_warning｜acknowledged｜recovered` |
+| 筛选：火情 / 已确认 / 已恢复 | **接口 5** | 服务端过滤用 `state=fire_warning｜recovered`（首期无 `acknowledged`，该枚举值会被 400 拒绝；「已确认」仅为前端遗留本地过滤项） |
 | （未使用）只看未结束 | **接口 5** | `active=true` |
 | 状态标签 | **接口 5** | `state` → `STATE_META` 文案与配色 |
 | 右上开始时间 | **接口 5** | `startedAt` |
-| 证据：气体上升 / 触发阈值 / 温升速率 / 样本数 | **接口 5** | `evidence.gasRise`、`gasRiseThreshold`、`temperatureRateCPerMinute`、`sampleCount` |
-| 底部「已确认 / 已恢复」时间 | **接口 5** | `acknowledgedAt`、`endedAt`（可能为 null） |
+| 证据：气体上升 / 触发阈值 / 温升速率 / 样本数 | **接口 5** | `evidence.gasAdcRise`、`gasAdcRiseThreshold`、`temperatureRateCPerMinute`、`sampleCount` |
+| 底部「已恢复」时间 | **接口 5** | `endedAt`（可能为 null；首期没有 `acknowledgedAt` 字段） |
 | 事件 ID | **接口 5** | `id`，用作列表 key |
 | （未展示）温升速率阈值 | **接口 5** | `evidence.temperatureRateThresholdCPerMinute`，建议补齐与「触发阈值」对称 |
 
@@ -152,7 +152,8 @@
 |---|---|---|---|
 | 温度上限数字 + 滑块 | **接口 6** | `temperatureHighC` | 0–80 °C，步长 0.5 |
 | 气体浓度上限数字 + 滑块 | **接口 6** | `gasHighPpm` | 1–999 ppm，步长 1 |
-| 保存并下发 | **接口 7** `PUT /thresholds` | 请求 `{ temperatureHighC, gasHighPpm }` + `Idempotency-Key` | 前端先做范围预校验，服务端 422 兜底 |
+| 湿度上限（页面暂无滑块） | **接口 6** | `humidityHighRh` | 0–100 %RH；保存时必须回传当前值（三字段全必填） |
+| 保存并下发 | **接口 7** `PUT /thresholds` | 请求 `{ temperatureHighC, humidityHighRh, gasHighPpm }`（三字段全必填）+ `Idempotency-Key` | 前端先做范围预校验；缺字段服务端 400、越界 422 兜底。**注意：当前 `settings.js` 只发送温度与气体两个字段，联调前必须补上湿度字段** |
 | 下发响应 | **接口 7** | `202 { requestId, status:"pending", desiredVersion, expiresAt }` | 用到 `desiredVersion`；`expiresAt` 可做倒计时提示 |
 | 规则同步状态 | **接口 6** | `confirmationState`：`confirmed｜pending｜rejected｜timed_out` | 文案见 `CONFIRM_TEXT` |
 | 期望版本 / 设备确认版本 | **接口 6** | `desiredVersion` / `confirmedVersion` | 两者不一致 = 命令在途/失败/设备离线 |
@@ -183,7 +184,7 @@
 
 ```text
 拖动滑块 → 点「保存并下发到设备」
-  → PUT /thresholds  body: { temperatureHighC, gasHighPpm } + Idempotency-Key
+  → PUT /thresholds  body: { temperatureHighC, humidityHighRh, gasHighPpm } + Idempotency-Key
   ← 202 { desiredVersion: N+1, status: "pending", expiresAt }
   → 界面：规则同步状态 = 等待设备确认（desiredVersion 已变，confirmedVersion 仍旧值）
   → 设备写 Flash 成功并 ack applied → Backend 更新 confirmedVersion = N+1
@@ -232,10 +233,10 @@
 | 404 | `device_not_found` | 「设备不存在或不可见」，监控页显示空态而非报错 | 2、3、6 |
 | 409 | `version_conflict` | 「版本冲突，请刷新后重试」（幂等键复用但内容不同） | 7 |
 | 422 | `invalid_threshold` | 用 `details.field` 定位到对应滑块下方红字提示 | 7 |
-| 429 | `rate_limited` | 「操作过于频繁，请稍后再试」 | 全部 |
+| 503 | `rate_limited` | 「实时连接已满」（仅 WebSocket 满员时出现，见 api.md §1.6/§11） | 9 |
 | 500 | `internal_error` | 「服务异常，稍后重试」 | 全部 |
 | 503 | `broker_unavailable` | 「命令未能下发到设备，请稍后重试」 | 7、8 |
-| 504 | `device_ack_timeout` | 「设备确认超时，请检查设备是否在线」 | 7、8 |
+| 504 | `device_ack_timeout` | 预留，当前不产生；设备确认超时以命令状态 `timed_out` 表达（见 api.md §1.6） | 7、8 |
 
 ---
 
@@ -243,14 +244,14 @@
 
 | 界面字段 | 契约字段 | 状态 |
 |---|---|---|
-| 风险状态 | `status.alarmState` | ✅ 5 枚举全支持 |
+| 风险状态 | `status.alarmState` | ✅ 4 枚举全支持（首期无 `acknowledged`） |
 | 在线状态 | `status.connectivity` | ✅ online / offline / unknown |
 | 温度 / 湿度 / 气体 | `telemetry.temperatureC / humidityRh / gasPpm` | ✅ |
 | 本地报警 | `telemetry.localAlarm` | ✅ |
 | 蜂鸣器 | `telemetry.buzzerMuted` | ✅ |
 | 更新时间 | `telemetry.receivedAt`（`timestamp` 兜底） | ✅ |
 | 告警状态与证据 | `alerts[].state`、`alerts[].evidence.*` | ✅ |
-| 阈值与版本 | `thresholds.temperatureHighC / gasHighPpm / desiredVersion / confirmedVersion / confirmationState` | ✅ |
+| 阈值与版本 | `thresholds.temperatureHighC / humidityHighRh / gasHighPpm / desiredVersion / confirmedVersion / confirmationState` | ✅ |
 | 控制命令 | `commands/mute`、`PUT thresholds` + `Idempotency-Key` | ✅ |
 | 实时流 | `ws/v1/...` 五类事件 | ✅ 已接入 |
 | `X-Request-ID`（建议头） | 契约 §1.4 | ⚠️ 前端未携带 |
@@ -258,7 +259,7 @@
 
 ---
 
-## 10. 联调 checklist（Backend 由 501 切到实现后）
+## 10. 联调 checklist（切到真实 Backend）
 
 1. `client-wx-native/config/env.js`：`useMock: false`；`baseUrl` 改真实地址（真机调试用电脑局域网 IP，如 `http://192.168.1.10:8080`），`wsUrl` 同步改为 `ws://…`。
 2. 微信开发者工具 → 详情 → 本地设置 → 勾选**「不校验合法域名」**；真机需在微信公众平台配置 `request` 与 `socket` 合法域名（须 HTTPS / WSS）。
