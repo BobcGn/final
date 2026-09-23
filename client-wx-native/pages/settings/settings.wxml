@@ -5,9 +5,10 @@
     <view class="page-head-sub">设置设备本地报警的安全边界</view>
   </view>
 
-  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+  <view class="hint" wx:if="{{loading && !settings}}">数据加载中...</view>
+  <view class="hint value-red" wx:if="{{error}}">{{error}}</view>
 
-  <block wx:else>
+  <block wx:if="{{settings}}">
     <!-- ============ 报警规则 ============ -->
     <view class="section-head">
       <view class="section-title">报警规则</view>
@@ -23,7 +24,7 @@
       <slider
         min="0"
         max="80"
-        step="0.5"
+        step="1"
         value="{{temperatureHighC}}"
         activeColor="#3fe8c3"
         backgroundColor="rgba(255,255,255,0.12)"
@@ -65,33 +66,35 @@
     <!-- ============ 设备确认 ============ -->
     <view class="section-head">
       <view class="section-title">设备确认</view>
-      <view class="section-tip">确保规则已生效</view>
+      <view class="section-tip">202 仅表示命令已接受</view>
     </view>
 
     <view class="list-card">
       <view class="list-row">
         <text class="list-label">规则同步状态</text>
-        <text class="list-value {{confirmationState === 'confirmed' ? 'value-green' : 'value-amber'}}">{{confirmText}}</text>
+        <text class="list-value {{settings.confirmationTone === 'mint' ? 'value-green' : (settings.confirmationTone === 'warning' ? 'value-amber' : 'value-red')}}">{{settings.confirmationText}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">期望版本</text>
-        <text class="list-value">{{desiredVersion}}</text>
+        <text class="list-value">{{settings.desiredVersion}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">设备确认版本</text>
-        <text class="list-value">{{confirmedVersion}}</text>
+        <text class="list-value">{{settings.confirmedVersion != null ? settings.confirmedVersion : '--'}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">更新时间</text>
-        <text class="list-value">{{updatedAt}}</text>
+        <text class="list-value">{{settings.updatedAt}}</text>
       </view>
     </view>
 
+    <view class="hint value-amber" wx:if="{{commandHint}}">{{commandHint}}</view>
+
     <view class="save-wrap">
-      <button class="btn btn-primary save-btn" bindtap="onSave" loading="{{saving}}">
+      <button class="btn btn-primary save-btn" bindtap="onSave" loading="{{saving}}" disabled="{{saving}}">
         保存并下发到设备
       </button>
     </view>
-    <view class="hint">下发后需设备确认，确认前仍按旧规则报警</view>
+    <view class="hint">{{settings.saveHint}}</view>
   </block>
 </view>

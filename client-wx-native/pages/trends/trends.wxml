@@ -20,7 +20,7 @@
 
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
 
-  <block wx:if="{{stats}}">
+  <block wx:if="{{trends && trends.hasData}}">
     <!-- ============ 统计摘要（横向滑动） ============ -->
     <view class="section-head">
       <view class="section-title">统计摘要</view>
@@ -34,18 +34,18 @@
             <text class="stat-name">温度</text>
             <text class="stat-unit">°C</text>
           </view>
-          <view class="stat-main">{{stats.temp.avg}}</view>
+          <view class="stat-main">{{trends.temperature.average}}</view>
           <view class="stat-meta">
             <view class="stat-meta-item">
               <text class="stat-meta-label">最低</text>
-              <text class="stat-meta-value">{{stats.temp.min}}</text>
+              <text class="stat-meta-value">{{trends.temperature.minimum}}</text>
             </view>
             <view class="stat-meta-item">
               <text class="stat-meta-label">最高</text>
-              <text class="stat-meta-value">{{stats.temp.max}}</text>
+              <text class="stat-meta-value">{{trends.temperature.maximum}}</text>
             </view>
           </view>
-          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.temp.maxAt}}</view>
+          <view class="stat-extreme">峰值 {{trends.temperature.peakAt}}</view>
         </view>
 
         <view class="stat-card">
@@ -53,18 +53,18 @@
             <text class="stat-name">湿度</text>
             <text class="stat-unit">%RH</text>
           </view>
-          <view class="stat-main">{{stats.hum.avg}}</view>
+          <view class="stat-main">{{trends.humidity.average}}</view>
           <view class="stat-meta">
             <view class="stat-meta-item">
               <text class="stat-meta-label">最低</text>
-              <text class="stat-meta-value">{{stats.hum.min}}</text>
+              <text class="stat-meta-value">{{trends.humidity.minimum}}</text>
             </view>
             <view class="stat-meta-item">
               <text class="stat-meta-label">最高</text>
-              <text class="stat-meta-value">{{stats.hum.max}}</text>
+              <text class="stat-meta-value">{{trends.humidity.maximum}}</text>
             </view>
           </view>
-          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.hum.maxAt}}</view>
+          <view class="stat-extreme">峰值 {{trends.humidity.peakAt}}</view>
         </view>
 
         <view class="stat-card">
@@ -72,52 +72,61 @@
             <text class="stat-name">气体</text>
             <text class="stat-unit">ppm</text>
           </view>
-          <view class="stat-main">{{stats.gas.avg}}</view>
+          <view class="stat-main">{{trends.gas.average}}</view>
           <view class="stat-meta">
-            <view class="stat-meta-item">
-              <text class="stat-meta-label">最低</text>
-              <text class="stat-meta-value">{{stats.gas.min}}</text>
-            </view>
-            <view class="stat-meta-item">
-              <text class="stat-meta-label">最高</text>
-              <text class="stat-meta-value">{{stats.gas.max}}</text>
-            </view>
+            <block wx:if="{{trends.gasSampleCount > 0}}">
+              <view class="stat-meta-item">
+                <text class="stat-meta-label">最低</text>
+                <text class="stat-meta-value">{{trends.gas.minimum}}</text>
+              </view>
+              <view class="stat-meta-item">
+                <text class="stat-meta-label">最高</text>
+                <text class="stat-meta-value">{{trends.gas.maximum}}</text>
+              </view>
+            </block>
+            <block wx:else>
+              <text class="stat-meta-label">无已校准气体读数</text>
+            </block>
           </view>
-          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.gas.maxAt}}</view>
+          <view class="stat-extreme" wx:if="{{trends.gasSampleCount > 0}}">峰值 {{trends.gas.peakAt}}</view>
         </view>
       </view>
     </scroll-view>
 
-    <!-- ============ 曲线区 ============ -->
-    <view class="section-head">
-      <view class="section-title">曲线视图</view>
-      <view class="section-tip">各指标按独立量程展示</view>
+    <view class="hint" wx:if="{{trends.gasSampleCount < trends.sampleCount}}">
+      {{trends.sampleCount - trends.gasSampleCount}} 条样本没有已校准气体读数，未计入气体统计
     </view>
-
-    <view class="card chart-card">
-      <view class="chart-legend">
-        <view class="legend-item"><view class="legend-dot dot-temp"></view><text>温度{{chartRanges.temp !== '--' ? ' (' + chartRanges.temp + ')' : ''}}</text></view>
-        <view class="legend-item"><view class="legend-dot dot-hum"></view><text>湿度{{chartRanges.hum !== '--' ? ' (' + chartRanges.hum + ')' : ''}}</text></view>
-        <view class="legend-item"><view class="legend-dot dot-gas"></view><text>气体{{chartRanges.gas !== '--' ? ' (' + chartRanges.gas + ')' : ''}}</text></view>
-      </view>
-      <view class="chart-body">
-        <canvas type="2d" id="trendsCanvas" class="trends-canvas"></canvas>
-        <!-- 空数据与网络失败是两个不同的状态：不能把加载失败写成「暂无历史数据」，
-             也不能在失败时继续把上一窗口的旧曲线当成当前窗口。 -->
-        <view class="chart-empty" wx:if="{{error}}">
-          <text>{{error}}</text>
-          <text class="chart-retry" bindtap="onRetryTap">点此重试</text>
-        </view>
-        <view class="chart-empty" wx:elif="{{!hasChartData}}">
-          <text>暂无历史数据</text>
-        </view>
-      </view>
-      <view class="chart-xaxis">
-        <text>{{axisTimes.start}}</text>
-        <text>{{axisTimes.end}}</text>
-      </view>
-    </view>
-
-    <view class="hint">三条曲线按各自量程展示，用于观察变化趋势，不用于直接比较曲线高度；数据受最近一页最多200条限制</view>
   </block>
+
+  <!-- ============ 曲线区（独立渲染，错误态与重试按钮不再被 stats 隐藏） ============ -->
+  <view class="section-head">
+    <view class="section-title">曲线视图</view>
+    <view class="section-tip">各指标按独立量程展示</view>
+  </view>
+
+  <view class="card chart-card">
+    <view class="chart-legend">
+      <view class="legend-item"><view class="legend-dot dot-temp"></view><text>温度{{chartRanges.temp !== '--' ? ' (' + chartRanges.temp + ')' : ''}}</text></view>
+      <view class="legend-item"><view class="legend-dot dot-hum"></view><text>湿度{{chartRanges.hum !== '--' ? ' (' + chartRanges.hum + ')' : ''}}</text></view>
+      <view class="legend-item"><view class="legend-dot dot-gas"></view><text>气体{{chartRanges.gas !== '--' ? ' (' + chartRanges.gas + ')' : ''}}</text></view>
+    </view>
+    <view class="chart-body">
+      <canvas type="2d" id="trendsCanvas" class="trends-canvas"></canvas>
+      <!-- 空数据与网络失败是两个不同的状态：不能把加载失败写成「暂无历史数据」，
+           也不能在失败时继续把上一窗口的旧曲线当成当前窗口。 -->
+      <view class="chart-empty" wx:if="{{error}}">
+        <text>{{error}}</text>
+        <text class="chart-retry" bindtap="onRetryTap">点此重试</text>
+      </view>
+      <view class="chart-empty" wx:elif="{{!hasChartData}}">
+        <text>暂无历史数据</text>
+      </view>
+    </view>
+    <view class="chart-xaxis">
+      <text>{{axisTimes.start}}</text>
+      <text>{{axisTimes.end}}</text>
+    </view>
+  </view>
+
+  <view class="hint">三条曲线按各自量程展示，用于观察变化趋势，不用于直接比较曲线高度；数据受最近一页最多200条限制</view>
 </view>

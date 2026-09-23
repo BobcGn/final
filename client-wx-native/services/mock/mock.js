@@ -1,14 +1,16 @@
 /**
  * Mock 数据层。
  *
- * 后端除 /healthz 外所有路由当前返回 501 not_implemented，前端在真实后端
- * 就绪前使用本模块开发。所有响应字段严格对齐接口契约（api.md draft-v1），
+ * 响应字段严格对齐接口契约（docs/api/openapi.yaml v2.0.0）。
  * 切换真实后端时页面代码零改动，只需把 config/env.js 的 useMock 置为 false。
  *
  * 行为模拟：
  * - 遥测数据按随机游走演进，每次请求 latest 相当于一次新采样；
- * - 阈值下发后 3 秒模拟设备确认（desiredVersion 追上 confirmedVersion）；
- * - 模拟网络延迟 150-400ms。
+ * - 历史遥测每隔 9 个点模拟一次 gasPpm: null（未标定），用于检验折线图分段与空态统计；
+ * - 告警证据采用 ADC 码与温升速率，无 acknowledged 伪状态；
+ * - 阈值下发支持三字段（含 humidityHighRh）；
+ * - 支持 GET /commands/{requestId} 轮询，模拟设备延时确认（published -> applied）；
+ * - 严格无远程静音能力。
  */
 const { ApiError } = require('../request.js')
 
@@ -17,11 +19,16 @@ const state = {
   temperatureC: 27.6,
   humidityRh: 60.5,
   gasPpm: 25.0,
-  thresholds: { temperatureHighC: 30.0, gasHighPpm: 80.0 },
+  thresholds: {
+    temperatureHighC: 30.0,
+    humidityHighRh: 60.0,
+    gasHighPpm: 80.0,
+  },
   desiredVersion: 4,
   confirmedVersion: 4,
   confirmationState: 'confirmed',
   updatedAt: '2026-09-18T11:10:00Z',
+  commands: {},
 }
 
 /* ---------- 内部工具 ---------- */
@@ -112,11 +119,14 @@ function getHistory(deviceId, query = {}) {
   let temp = state.temperatureC
   let hum = state.humidityRh
   let gas = state.gasPpm
+
   for (let i = limit; i >= 1; i--) {
     temp = clamp(temp + rand(-0.2, 0.2), 24.5, 30.5)
     hum = clamp(hum + rand(-1, 1), 48, 72)
     gas = clamp(gas + rand(-1.5, 1.5), 14, 42)
     const ts = new Date(base - i * stepMs).toISOString()
+    // 每 9 条样本模拟一次未标定气体（gasPpm 为 null）
+    const isUncalibrated = i % 9 === 0
     items.push({
       deviceId,
       sequence: state.seq - i,
@@ -126,11 +136,12 @@ function getHistory(deviceId, query = {}) {
       humidityRh: round1(hum),
       gasAdcRaw: Math.round(gas * 52),
       gasAdcFiltered: Math.round(gas * 52) - 12,
-      gasPpm: round1(gas),
+      gasPpm: isUncalibrated ? null : round1(gas),
       localAlarm: false,
       alarmCauses: [],
     })
   }
+
   if (query.order === 'desc') {
     items.reverse()
   }
@@ -145,29 +156,29 @@ function getAlerts(deviceId) {
         deviceId,
         state: 'recovered',
         startedAt: minutesAgoIso(52),
-        acknowledgedAt: minutesAgoIso(50),
         endedAt: minutesAgoIso(47),
         evidence: {
-          gasRise: 96.0,
-          gasRiseThreshold: 150.0,
+          gasAdcRise: 96,
+          gasAdcRiseThreshold: 150,
           temperatureRateCPerMinute: 1.1,
           temperatureRateThresholdCPerMinute: 3.0,
           sampleCount: 6,
+          windowSeconds: 30,
         },
       },
       {
         id: 'mock-alert-002',
         deviceId,
-        state: 'acknowledged',
+        state: 'suspect',
         startedAt: minutesAgoIso(180),
-        acknowledgedAt: minutesAgoIso(175),
         endedAt: null,
         evidence: {
-          gasRise: 165.0,
-          gasRiseThreshold: 150.0,
+          gasAdcRise: 165,
+          gasAdcRiseThreshold: 150,
           temperatureRateCPerMinute: 2.4,
           temperatureRateThresholdCPerMinute: 3.0,
           sampleCount: 7,
+          windowSeconds: 30,
         },
       },
       {
@@ -175,14 +186,14 @@ function getAlerts(deviceId) {
         deviceId,
         state: 'fire_warning',
         startedAt: minutesAgoIso(1440),
-        acknowledgedAt: null,
         endedAt: null,
         evidence: {
-          gasRise: 187.0,
-          gasRiseThreshold: 150.0,
+          gasAdcRise: 187,
+          gasAdcRiseThreshold: 150,
           temperatureRateCPerMinute: 4.2,
           temperatureRateThresholdCPerMinute: 3.0,
           sampleCount: 8,
+          windowSeconds: 30,
         },
       },
     ],
@@ -195,6 +206,7 @@ function getThresholds(deviceId) {
     desiredVersion: state.desiredVersion,
     confirmedVersion: state.confirmedVersion,
     temperatureHighC: state.thresholds.temperatureHighC,
+    humidityHighRh: state.thresholds.humidityHighRh,
     gasHighPpm: state.thresholds.gasHighPpm,
     updatedAt: state.updatedAt,
     confirmationState: state.confirmationState,
@@ -202,28 +214,60 @@ function getThresholds(deviceId) {
 }
 
 function putThresholds(deviceId, data = {}) {
-  const { temperatureHighC, gasHighPpm } = data
+  const { temperatureHighC, humidityHighRh, gasHighPpm } = data
   if (typeof temperatureHighC !== 'number' || temperatureHighC < 0 || temperatureHighC > 80) {
     throw new ApiError('invalid_threshold', 'temperatureHighC must be between 0 and 80', 422)
+  }
+  if (typeof humidityHighRh !== 'number' || humidityHighRh < 0 || humidityHighRh > 100) {
+    throw new ApiError('invalid_threshold', 'humidityHighRh must be between 0 and 100', 422)
   }
   if (typeof gasHighPpm !== 'number' || gasHighPpm < 1 || gasHighPpm > 999) {
     throw new ApiError('invalid_threshold', 'gasHighPpm must be between 1 and 999', 422)
   }
-  state.thresholds = { temperatureHighC, gasHighPpm }
+
+  state.thresholds = { temperatureHighC, humidityHighRh, gasHighPpm }
   state.desiredVersion += 1
   state.confirmationState = 'pending'
   state.updatedAt = nowIso()
-  // 模拟设备 3 秒后回 ack（真实场景由 thresholds.confirmed WebSocket 事件驱动）
+
+  const requestId = 'mock-req-' + state.desiredVersion
+  state.commands[requestId] = {
+    requestId,
+    deviceId,
+    type: 'set_thresholds',
+    state: 'published',
+    acceptedAt: nowIso(),
+    completedAt: null,
+    desiredVersion: state.desiredVersion,
+    confirmedVersion: state.confirmedVersion,
+    errorCode: null,
+  }
+
+  // 模拟设备 1.5 秒后回 ack applied
   setTimeout(() => {
-    state.confirmedVersion = state.desiredVersion
-    state.confirmationState = 'confirmed'
-  }, 3000)
+    if (state.commands[requestId]) {
+      state.commands[requestId].state = 'applied'
+      state.commands[requestId].completedAt = nowIso()
+      state.commands[requestId].confirmedVersion = state.desiredVersion
+      state.confirmedVersion = state.desiredVersion
+      state.confirmationState = 'confirmed'
+    }
+  }, 1500)
+
   return {
-    requestId: 'mock-req-' + state.desiredVersion,
+    requestId,
     status: 'pending',
     desiredVersion: state.desiredVersion,
     expiresAt: new Date(Date.now() + 30000).toISOString(),
   }
+}
+
+function getCommandStatus(deviceId, requestId) {
+  const cmd = state.commands[requestId]
+  if (!cmd) {
+    throw new ApiError('not_found', '命令未找到: ' + requestId, 404)
+  }
+  return cmd
 }
 
 /* ---------- 路由分发 ---------- */
@@ -234,7 +278,7 @@ function putThresholds(deviceId, data = {}) {
  * @param {Object} [options] { method, data, query }
  */
 async function handle(path, options = {}) {
-  await delay(150 + Math.random() * 250)
+  await delay(100 + Math.random() * 150)
   const method = (options.method || 'GET').toUpperCase()
   const m = path.match(/^\/api\/v1\/devices\/([^/]+)\/(.+)$/)
   if (!m) throw new ApiError('not_implemented', 'Mock 未覆盖该路由: ' + path, 501)
@@ -247,6 +291,10 @@ async function handle(path, options = {}) {
   if (sub === 'alerts' && method === 'GET') return getAlerts(deviceId)
   if (sub === 'thresholds' && method === 'GET') return getThresholds(deviceId)
   if (sub === 'thresholds' && method === 'PUT') return putThresholds(deviceId, options.data)
+
+  const cmdMatch = sub.match(/^commands\/([^/]+)$/)
+  if (cmdMatch && method === 'GET') return getCommandStatus(deviceId, cmdMatch[1])
+
   throw new ApiError('not_implemented', 'Mock 未覆盖该路由: ' + method + ' ' + path, 501)
 }
 

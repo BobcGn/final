@@ -5,84 +5,93 @@
     <view class="page-head-sub">智慧机房 · 实时动环监测</view>
   </view>
 
-  <!-- ============ 系统风险状态 ============ -->
-  <view class="card">
-    <view class="risk-label">系统风险状态</view>
-    <view class="risk-main">
-      <view class="risk-dot level-{{banner.level}}"></view>
-      <text class="risk-text level-{{banner.level}}">{{banner.text}}</text>
-      <view class="tag tag-{{connectivity.level}} risk-pill">{{connectivity.text}}</view>
-    </view>
-    <view class="risk-sub" wx:if="{{banner.sub}}">{{banner.sub}}</view>
-  </view>
+  <view class="hint" wx:if="{{loading && !view}}">数据加载中...</view>
+  <view class="hint value-red" wx:if="{{error}}">{{error}}</view>
 
-  <!-- ============ 实时数据 ============ -->
-  <view class="section-head">
-    <view class="section-title">实时数据</view>
-    <view class="section-tip">{{streamText}}</view>
-  </view>
-
-  <view class="meters" wx:if="{{view}}">
-    <view class="meter">
-      <view class="meter-top">
-        <view class="meter-badge badge-temp">T</view>
-        <text class="meter-label">温度</text>
+  <block wx:if="{{view}}">
+    <!-- ============ 系统风险状态 ============ -->
+    <view class="card">
+      <view class="risk-label">系统风险状态</view>
+      <view class="risk-main">
+        <view class="risk-dot level-{{view.riskLevel}}"></view>
+        <text class="risk-text level-{{view.riskLevel}}">{{view.riskText}}</text>
+        <view class="tag tag-{{view.online ? 'green' : 'gray'}} risk-pill">{{view.connectivityText}}</view>
       </view>
-      <view class="meter-value">{{view.temperatureC}}<text class="meter-unit">°C</text></view>
-      <view class="meter-track">
-        <view class="meter-fill fill-temp" style="width: {{view.tempPercent}}%"></view>
-      </view>
+      <view class="risk-sub">{{view.riskDetail}}</view>
     </view>
 
-    <view class="meter">
-      <view class="meter-top">
-        <view class="meter-badge badge-hum">H</view>
-        <text class="meter-label">湿度</text>
+    <!-- 尚未上报数据提示 -->
+    <view class="hint" wx:if="{{!view.hasData}}">该设备尚未上报有效遥测数据</view>
+
+    <!-- ============ 实时数据 ============ -->
+    <view class="section-head">
+      <view class="section-title">实时数据</view>
+      <view class="section-tip">每 3 秒同步</view>
+    </view>
+
+    <view class="meters">
+      <view class="meter">
+        <view class="meter-top">
+          <view class="meter-badge badge-temp">T</view>
+          <text class="meter-label">温度</text>
+        </view>
+        <view class="meter-value">{{view.temperatureText}}<text class="meter-unit">°C</text></view>
+        <view class="meter-track">
+          <view class="meter-fill fill-temp" style="width: {{view.temperaturePercent}}%"></view>
+        </view>
       </view>
-      <view class="meter-value">{{view.humidityRh}}<text class="meter-unit">%</text></view>
-      <view class="meter-track">
-        <view class="meter-fill fill-hum" style="width: {{view.humPercent}}%"></view>
+
+      <view class="meter">
+        <view class="meter-top">
+          <view class="meter-badge badge-hum">H</view>
+          <text class="meter-label">湿度</text>
+        </view>
+        <view class="meter-value">{{view.humidityText}}<text class="meter-unit">%</text></view>
+        <view class="meter-track">
+          <view class="meter-fill fill-hum" style="width: {{view.humidityPercent}}%"></view>
+        </view>
+      </view>
+
+      <view class="meter">
+        <view class="meter-top">
+          <view class="meter-badge badge-gas">G</view>
+          <text class="meter-label">气体</text>
+        </view>
+        <view class="meter-value">{{view.gasText}}<text class="meter-unit">ppm</text></view>
+        <view class="meter-track">
+          <view class="meter-fill fill-gas" style="width: {{view.gasPercent}}%"></view>
+        </view>
       </view>
     </view>
 
-    <view class="meter">
-      <view class="meter-top">
-        <view class="meter-badge badge-gas">G</view>
-        <text class="meter-label">气体</text>
+    <!-- ============ 设备状态 ============ -->
+    <view class="section-head">
+      <view class="section-title">设备状态</view>
+      <view class="section-tip">本地采集终端</view>
+    </view>
+
+    <view class="card">
+      <view class="device-head">
+        <view class="device-name-wrap">
+          <view class="device-dot {{view.online ? '' : 'device-dot-off'}}"></view>
+          <text class="device-name">{{view.deviceId}}</text>
+        </view>
+        <view class="tag tag-{{view.online ? 'green' : 'gray'}}">{{view.connectivityText}}</view>
       </view>
-      <view class="meter-value">{{view.gasPpm}}<text class="meter-unit">ppm</text></view>
-      <view class="meter-track">
-        <view class="meter-fill fill-gas" style="width: {{view.gasPercent}}%"></view>
+      <view class="device-grid">
+        <view class="device-cell">
+          <text class="cell-label">本地报警</text>
+          <text class="cell-value {{view.localAlarm ? 'value-red' : 'value-green'}}">{{view.localAlarmText}}</text>
+        </view>
+        <view class="device-cell">
+          <text class="cell-label">声光提示</text>
+          <text class="cell-value">{{view.buzzerText}}</text>
+        </view>
+        <view class="device-cell">
+          <text class="cell-label">更新时间</text>
+          <text class="cell-value">{{view.updatedAt}}</text>
+        </view>
       </view>
     </view>
-  </view>
-
-  <!-- ============ 设备状态 ============ -->
-  <view class="section-head">
-    <view class="section-title">设备状态</view>
-    <view class="section-tip">本地采集终端</view>
-  </view>
-
-  <view class="card" wx:if="{{latest}}">
-    <view class="device-head">
-      <view class="device-name-wrap">
-        <view class="device-dot {{connectivity.level === 'green' ? '' : 'device-dot-off'}}"></view>
-        <text class="device-name">{{deviceId}}</text>
-      </view>
-      <view class="tag tag-{{connectivity.level}}">{{connectivity.text}}</view>
-    </view>
-    <view class="device-grid">
-      <view class="device-cell">
-        <text class="cell-label">本地报警</text>
-        <text class="cell-value {{latest.localAlarm ? 'value-red' : 'value-green'}}">{{latest.localAlarm ? '报警中' : '正常'}}</text>
-      </view>
-      <view class="device-cell">
-        <text class="cell-label">更新时间</text>
-        <text class="cell-value">{{updatedAt}}</text>
-      </view>
-    </view>
-  </view>
-
-  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
-  <view class="hint" wx:if="{{error}}">{{error}}</view>
+  </block>
 </view>
