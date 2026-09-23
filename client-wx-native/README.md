@@ -13,7 +13,7 @@
   - 告警记录按 4 种类型筛选（全部、火警预警、疑似异常、已恢复），告警证据展示 ADC 读数增量（`gasAdcRise`）；完全移除远程静音与已确认逻辑；
   - 阈值设置严格提交完整三字段（含 `humidityHighRh`），校验范围 0-80 / 0-100 / 1-999；设置后采用 `GET /commands/{requestId}` 轮询下发状态直至生效。
 - **实时监控刷新**：仅监控大屏按 3000ms 周期获取 `status + latest` 原子快照（串行守卫防止请求重叠）；趋势页按需加载历史数据。最新遥测 404 时降级为空状态提示。
-- **Mock 与联调**：当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（`services/mock/`），Mock 响应字段与 OpenAPI 契约及状态机一致；联调时将 `useMock` 置为 `false` 即可切换真实接口。
+- **数据源与联调**：默认通过 `config/env.js` 的 `useMock: false` 请求真实后端，确保实时读数来自设备遥测；本地 Mock 数据（`services/mock/`）仅供离线开发时临时启用。联调前请确认 `baseUrl` / `wsUrl` 能从运行小程序的环境访问后端；真机调试需填写后端电脑的局域网地址，不能使用 `localhost`。
 
 ## Project Boundary
 

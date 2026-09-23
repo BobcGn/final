@@ -5,6 +5,7 @@ const deviceService = require('../services/device.js')
 const { ApiError } = require('../services/request.js')
 const { formatRfc3339, genIdempotencyKey } = require('../utils/helpers.js')
 const presentation = require('../utils/presentation.js')
+const { env } = require('../config/env.js')
 
 test('loadDashboard returns hasData=false when latest telemetry is 404', async () => {
   const origGetStatus = deviceService.getStatus
@@ -257,28 +258,34 @@ test('presentation selectors returns window and filter lists', () => {
 })
 
 test('mock service handlers handle status, latest, history, alerts, thresholds and commands', async () => {
-  const status = await deviceService.getStatus('MCU001')
-  assert.ok(status.deviceId)
+  const originalUseMock = env.useMock
+  env.useMock = true
+  try {
+    const status = await deviceService.getStatus('MCU001')
+    assert.ok(status.deviceId)
 
-  const latest = await deviceService.getLatestTelemetry('MCU001')
-  assert.ok(latest.temperatureC)
+    const latest = await deviceService.getLatestTelemetry('MCU001')
+    assert.ok(latest.temperatureC)
 
-  const history = await deviceService.getTelemetryHistory('MCU001', { limit: 10, order: 'desc' })
-  assert.ok(history.items.length <= 10)
+    const history = await deviceService.getTelemetryHistory('MCU001', { limit: 10, order: 'desc' })
+    assert.ok(history.items.length <= 10)
 
-  const alerts = await deviceService.getAlerts('MCU001')
-  assert.ok(alerts.items.length > 0)
+    const alerts = await deviceService.getAlerts('MCU001')
+    assert.ok(alerts.items.length > 0)
 
-  const thresholds = await deviceService.getThresholds('MCU001')
-  assert.ok(thresholds.desiredVersion)
+    const thresholds = await deviceService.getThresholds('MCU001')
+    assert.ok(thresholds.desiredVersion)
 
-  const putRes = await deviceService.putThresholds('MCU001', {
-    temperatureHighC: 32,
-    humidityHighRh: 65,
-    gasHighPpm: 90,
-  })
-  assert.ok(putRes.requestId)
+    const putRes = await deviceService.putThresholds('MCU001', {
+      temperatureHighC: 32,
+      humidityHighRh: 65,
+      gasHighPpm: 90,
+    })
+    assert.ok(putRes.requestId)
 
-  const cmdStatus = await deviceService.getCommandStatus('MCU001', putRes.requestId)
-  assert.ok(cmdStatus.state)
+    const cmdStatus = await deviceService.getCommandStatus('MCU001', putRes.requestId)
+    assert.ok(cmdStatus.state)
+  } finally {
+    env.useMock = originalUseMock
+  }
 })
