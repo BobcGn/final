@@ -38,12 +38,6 @@
 }
 
 /* 状态配色 */
-.level-suspect.risk-dot { background: var(--warn); box-shadow: 0 0 18rpx rgba(245, 201, 107, 0.4); animation-duration: 1.6s; }
-.level-suspect.risk-text { color: var(--warn); }
-.level-fire.risk-dot { background: var(--danger); box-shadow: 0 0 20rpx rgba(251, 113, 133, 0.55); animation-duration: 1.2s; }
-.level-fire.risk-text { color: var(--danger); }
-.level-recovered.risk-dot { background: var(--info); box-shadow: 0 0 18rpx rgba(125, 211, 252, 0.45); }
-.level-recovered.risk-text { color: var(--info); }
 
 @keyframes breathe {
   0%, 100% { opacity: 1; }

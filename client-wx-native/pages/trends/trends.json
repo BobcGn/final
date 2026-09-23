@@ -1,3 +1,5 @@
 {
-  "navigationBarTitleText": "历史趋势"
+  "navigationBarTitleText": "历史趋势",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "light"
 }

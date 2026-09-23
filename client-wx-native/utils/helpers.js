@@ -1,24 +1,9 @@
 /**
- * 通用工具：时间格式化与幂等键生成。
+ * 通用工具：幂等键生成。
+ *
+ * 时间展示统一走 utils/format.js 的 clockText（与 KMP 共享层同规则），
+ * 因此原先的本地时间格式化函数已移除，避免两端出现不同的时间口径。
  */
-
-/** RFC 3339 时间转 'MM-DD HH:mm'，用于列表展示 */
-function formatRfc3339(iso) {
-  if (!iso) return '--'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '--'
-  const p = (n) => (n < 10 ? '0' + n : '' + n)
-  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
-}
-
-/** RFC 3339 时间转 'HH:mm:ss'，用于实时页面的更新时间展示 */
-function formatTime(iso) {
-  if (!iso) return '--:--:--'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '--:--:--'
-  const p = (n) => (n < 10 ? '0' + n : '' + n)
-  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
-}
 
 /**
  * 生成 UUID v4 字符串，作为控制类请求（静音/阈值下发）的 Idempotency-Key。
@@ -32,4 +17,4 @@ function genIdempotencyKey() {
   })
 }
 
-module.exports = { formatRfc3339, formatTime, genIdempotencyKey }
+module.exports = { genIdempotencyKey }

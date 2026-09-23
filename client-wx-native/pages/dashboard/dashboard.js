@@ -1,189 +1,118 @@
 /**
- * 实时监控首页。
+ * 机房环境总览页（仪表盘）。
  *
- * 数据流（契约 §10 推荐做法）：
- * 1) 进入页面先走 REST 补数：GET status + GET telemetry/latest；
- * 2) 随后订阅 WebSocket 增量：telemetry.updated / device.status_changed /
- *    alert.state_changed / command.status_changed；
- * 3) 断线重连后由 socket 回调 onResync 再走一次 REST 补数，避免丢失增量。
- *
- * Mock 模式下 socket 由本地定时器投递同格式事件，页面代码无需区分。
+ * 与 KMP 方案严格对齐（client-kmp/miniApp/pages/monitor/monitor.js）：
+ * - 每 3 秒重取一次「status + latest」组成原子快照，指标与风险状态同帧更新；
+ * - 只在本页可见时轮询，隐藏或卸载立即停止；
+ * - 刷新失败写入 error 但不中断轮询，下一轮自然重试；
+ * - 示数、百分比、空态、文案全部由共享展示层派生（utils/presentation.js），
+ *   本页不做任何数值换算，避免与 KMP 出现精度或文案差异。
  */
-const deviceService = require('../../services/device.js')
-const socket = require('../../services/socket.js')
-const { formatTime } = require('../../utils/helpers.js')
+const monitoring = require('../../services/monitoring.js')
 
-/** 复合预警状态 -> 文案与配色（枚举值来自契约 §4） */
-const ALARM_STATE = {
-  normal: { level: 'normal', text: '环境正常', sub: '各项指标处于安全范围' },
-  suspect: { level: 'suspect', text: '疑似异常', sub: '部分条件异常，系统确认中' },
-  fire_warning: { level: 'fire', text: '火情预警', sub: '气体突增与温升速率同时超限' },
-  acknowledged: { level: 'suspect', text: '告警已确认', sub: '人员已确认，等待环境恢复' },
-  recovered: { level: 'recovered', text: '指标已恢复', sub: '事件归档中' },
-}
-
-/** 设备连接状态 -> 标签配色 */
-const CONNECTIVITY = {
-  online: { level: 'green', text: '在线' },
-  offline: { level: 'red', text: '离线' },
-  unknown: { level: 'gray', text: '未知' },
-}
+/** 仪表盘刷新节奏；与 KMP 宿主保持一致 */
+const POLL_INTERVAL_MS = 3000
 
 Page({
   data: {
-    deviceId: 'MCU001',
+    /** DashboardView（已格式化） */
+    dashboard: null,
     loading: true,
     error: '',
-    banner: ALARM_STATE.normal,
-    connectivity: CONNECTIVITY.unknown,
-    latest: null,
-    view: null,
-    updatedAt: '--:--:--',
     muting: false,
-    /** 实时通道状态文案（来自 services/socket.js 的本地连接事件） */
-    streamText: '连接中…',
+    /** 控制命令的结果提示（等待/已确认/失败） */
+    commandHint: '',
+    commandTone: 'warning',
   },
 
   onLoad() {
-    this.fetchInitial()
+    this.loadDashboard(true)
   },
 
   onShow() {
     if (typeof this.getTabBar === 'function' && this.getTabBar()) {
       this.getTabBar().setData({ selected: 0 })
     }
-    this.subscribeStream()
+    this.startPolling()
   },
 
   onHide() {
-    this.unsubscribeStream()
+    this.stopPolling()
   },
 
   onUnload() {
-    this.unsubscribeStream()
+    this.stopPolling()
   },
 
-  /* ---------- 实时订阅 ---------- */
-
-  /** 订阅 WebSocket 事件；重连后回调 onResync 走 REST 补数 */
-  subscribeStream() {
-    if (this._offs) return
-    socket.connect(this.data.deviceId, { onResync: () => this.resync() })
-
-    this._offs = [
-      socket.on(socket.CONNECTION_EVENT, (evt) => {
-        this.setData({ streamText: this.describeStream(evt.status) })
-      }),
-      socket.on('telemetry.updated', (evt) => {
-        this.applyTelemetry(Object.assign({}, evt.data, { deviceId: this.data.deviceId, receivedAt: evt.occurredAt }))
-      }),
-      socket.on('device.status_changed', () => this.fetchStatus()),
-      socket.on('alert.state_changed', () => this.fetchStatus()),
-      socket.on('command.status_changed', () => {
-        this.fetchStatus()
-        this.fetchLatest()
-      }),
-    ]
-    this.setData({ streamText: this.describeStream(socket.getConnectionStatus()) })
-  },
-
-  unsubscribeStream() {
-    if (this._offs) {
-      this._offs.forEach((off) => off())
-      this._offs = null
-    }
-    socket.disconnect()
-  },
-
-  describeStream(status) {
-    if (status === 'open') return '实时推送'
-    if (status === 'connecting') return '连接中…'
-    if (status === 'reconnecting') return '重连中，已切 REST 兜底'
-    return '未连接'
-  },
-
-  /** 断线重连后的 REST 补数（只拉最新值，不整页 loading） */
-  async resync() {
-    await Promise.all([this.fetchStatus(), this.fetchLatest()])
-  },
-
-  /* ---------- REST 补数 ---------- */
-
-  /** 下拉刷新 */
+  /** 下拉刷新：立即取一次，并结束下拉动画 */
   async onPullDownRefresh() {
-    await this.fetchInitial()
+    await this.loadDashboard(false)
     wx.stopPullDownRefresh()
   },
 
-  /** 初始化：并行拉取设备状态与最新遥测 */
-  async fetchInitial() {
-    try {
-      const [status, latest] = await Promise.all([
-        deviceService.getStatus(this.data.deviceId),
-        deviceService.getLatestTelemetry(this.data.deviceId),
-      ])
-      this.applyStatus(status)
-      this.applyTelemetry(latest)
-      this.setData({ loading: false, error: '' })
-    } catch (e) {
-      this.setData({ loading: false, error: (e && e.message) || '数据加载失败' })
-    }
+  startPolling() {
+    this.stopPolling()
+    this._timer = setInterval(() => {
+      this.loadDashboard(false)
+    }, POLL_INTERVAL_MS)
   },
 
-  async fetchStatus() {
-    try {
-      this.applyStatus(await deviceService.getStatus(this.data.deviceId))
-    } catch (e) {
-      // 单次补数失败不打断页面，等待下次事件或兜底轮询
-    }
-  },
-
-  async fetchLatest() {
-    try {
-      this.applyTelemetry(await deviceService.getLatestTelemetry(this.data.deviceId))
-    } catch (e) {
-      // 同上
-    }
-  },
-
-  applyStatus(status) {
-    this.setData({
-      banner: ALARM_STATE[status.alarmState] || ALARM_STATE.normal,
-      connectivity: CONNECTIVITY[status.connectivity] || CONNECTIVITY.unknown,
-    })
-  },
-
-  /** 将遥测转换为视图模型：字符串数值 + 进度条百分比 */
-  applyTelemetry(latest) {
-    this.setData({
-      latest,
-      updatedAt: formatTime(latest.receivedAt || latest.timestamp),
-      view: {
-        temperatureC: latest.temperatureC.toFixed(1),
-        humidityRh: latest.humidityRh.toFixed(1),
-        gasPpm: latest.gasPpm.toFixed(1),
-        tempPercent: Math.min(100, (latest.temperatureC / 40) * 100),
-        humPercent: Math.min(100, latest.humidityRh),
-        gasPercent: Math.min(100, (latest.gasPpm / 100) * 100),
-      },
-    })
+  stopPolling() {
+    if (this._timer) clearInterval(this._timer)
+    this._timer = null
   },
 
   /**
-   * 远程静音/恢复：POST /commands/mute（202 表示后端已接受）。
-   * 契约要求由后端/设备确认后才改变状态，因此这里只提示「已下发」，
-   * buzzerMuted 的真实变化由 command.status_changed 或下次补数驱动。
+   * 刷新仪表盘。
+   *
+   * 失败的刷新只写入 error，不抛出、不停止轮询：一次网络抖动不应该让页面永久停更。
+   * 上一轮未返回时跳过本轮，避免弱网下请求叠加把页面挤得更慢。
+   * @param {boolean} showLoading 是否显示整页加载态（首屏显示，轮询不显示）
+   */
+  async loadDashboard(showLoading) {
+    if (this._inflight) return
+    this._inflight = true
+    if (showLoading) this.setData({ loading: true })
+    try {
+      const view = await monitoring.loadDashboard()
+      this.setData({ dashboard: view, loading: false, error: '' })
+    } catch (e) {
+      this.setData({ loading: false, error: (e && e.message) || '数据加载失败' })
+    } finally {
+      this._inflight = false
+    }
+  },
+
+  /**
+   * 蜂鸣器静音/恢复。
+   *
+   * 入队响应只代表后端已接受命令，因此这里不下结论：轮询
+   * `GET /commands/{requestId}` 拿到设备终态后，只有 `applied` 才算成功；
+   * 超时不得提示成功（契约 §9 与 KMP `awaitCommandOutcome` 的语义）。
    */
   async onMuteTap() {
-    if (this.data.muting || !this.data.latest) return
-    const muted = !this.data.latest.buzzerMuted
-    this.setData({ muting: true })
+    if (this.data.muting || !this.data.dashboard) return
+    const muted = !this.data.dashboard.buzzerMuted
+    this.setData({ muting: true, commandHint: '' })
+    wx.showLoading({ title: '下发中', mask: true })
     try {
-      await deviceService.muteBuzzer(this.data.deviceId, muted)
-      wx.showToast({ title: muted ? '静音命令已下发' : '恢复命令已下发', icon: 'none' })
+      const accepted = await monitoring.setMuted(muted)
+      this.setData({ commandHint: accepted.stateText, commandTone: accepted.tone })
+      const outcome = await monitoring.awaitCommandOutcome(accepted.requestId)
+      this.setData({
+        commandHint: outcome ? outcome.stateText : '等待设备确认',
+        commandTone: outcome ? outcome.tone : 'warning',
+      })
+      await this.loadDashboard(false)
+      wx.showToast({
+        title: outcome ? outcome.stateText : '等待设备确认',
+        // 只有设备明确 applied 才是成功；pending/duplicate/failed 不能给绿勾
+        icon: outcome && outcome.confirmed ? 'success' : 'none',
+      })
     } catch (e) {
-      wx.showToast({ title: (e && e.message) || '命令下发失败', icon: 'none' })
+      wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
     } finally {
+      wx.hideLoading()
       this.setData({ muting: false })
     }
   },

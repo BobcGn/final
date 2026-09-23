@@ -1,3 +1,8 @@
+<!--
+  预警阈值。
+  三个阈值字段都要下发（契约必填），湿度在界面上不可编辑但对齐 KMP 一起发送；
+  保存后轮询命令终态，只有设备 applied 才算成功。
+-->
 <view class="page">
   <!-- 页头 -->
   <view class="page-head">
@@ -6,8 +11,9 @@
   </view>
 
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+  <view class="hint" wx:if="{{error}}">{{error}}</view>
 
-  <block wx:else>
+  <block wx:if="{{settings}}">
     <!-- ============ 报警规则 ============ -->
     <view class="section-head">
       <view class="section-title">报警规则</view>
@@ -29,8 +35,8 @@
         backgroundColor="rgba(255,255,255,0.12)"
         block-size="26"
         block-color="#ffffff"
-        bindchange="onTempChange"
-        bindchanging="onTempChange"
+        bindchange="onTemp"
+        bindchanging="onTemp"
       />
       <view class="range-hint">
         <text>0 °C</text>
@@ -53,8 +59,8 @@
         backgroundColor="rgba(255,255,255,0.12)"
         block-size="26"
         block-color="#ffffff"
-        bindchange="onGasChange"
-        bindchanging="onGasChange"
+        bindchange="onGas"
+        bindchanging="onGas"
       />
       <view class="range-hint">
         <text>1 ppm</text>
@@ -71,27 +77,28 @@
     <view class="list-card">
       <view class="list-row">
         <text class="list-label">规则同步状态</text>
-        <text class="list-value {{confirmationState === 'confirmed' ? 'value-green' : 'value-amber'}}">{{confirmText}}</text>
+        <text class="list-value tone-{{settings.confirmationTone}}">{{settings.confirmationText}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">期望版本</text>
-        <text class="list-value">{{desiredVersion}}</text>
+        <text class="list-value">{{settings.desiredVersion}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">设备确认版本</text>
-        <text class="list-value">{{confirmedVersion}}</text>
+        <text class="list-value">{{settings.confirmedVersion}}</text>
       </view>
       <view class="list-row">
         <text class="list-label">更新时间</text>
-        <text class="list-value">{{updatedAt}}</text>
+        <text class="list-value">{{settings.updatedAt}}</text>
       </view>
     </view>
 
     <view class="save-wrap">
-      <button class="btn btn-primary save-btn" bindtap="onSave" loading="{{saving}}">
+      <button class="btn btn-primary save-btn" bindtap="onSave" disabled="{{saving}}" loading="{{saving}}">
         保存并下发到设备
       </button>
     </view>
-    <view class="hint">下发后需设备确认，确认前仍按旧规则报警</view>
+    <view class="command-hint command-hint-{{commandTone}}" wx:if="{{commandHint}}">{{commandHint}}</view>
+    <view class="hint">{{settings.saveHint}}</view>
   </block>
 </view>

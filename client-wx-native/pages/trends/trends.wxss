@@ -122,9 +122,9 @@
   border-radius: 50%;
   margin-right: 10rpx;
 }
-.dot-temp { background: #fb7185; }
-.dot-hum { background: #a5b4fc; }
-.dot-gas { background: var(--accent); }
+.dot-danger { background: #fb7185; }
+.dot-info { background: #7dd3fc; }
+.dot-mint { background: var(--accent); }
 
 .chart-body {
   position: relative;

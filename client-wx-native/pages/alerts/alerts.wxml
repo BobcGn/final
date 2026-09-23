@@ -1,3 +1,8 @@
+<!--
+  告警记录。
+  证据一律读自后端持久化的 evidence（ADC 码口径），绝不用最新值反推历史原因；
+  筛选在客户端做，因为契约的 alerts 查询没有 state 参数。
+-->
 <view class="page">
   <!-- 页头 -->
   <view class="page-head">
@@ -10,9 +15,9 @@
     <view
       wx:for="{{filters}}"
       wx:key="key"
-      class="filter-item {{activeFilter === item.key ? 'filter-active' : ''}}"
+      class="filter-item {{filterKey === item.key ? 'filter-active' : ''}}"
       data-key="{{item.key}}"
-      bindtap="onFilterTap"
+      bindtap="onFilter"
       hover-class="filter-hover"
       hover-stay-time="60"
     >{{item.label}}</view>
@@ -22,19 +27,19 @@
   <view class="hint" wx:if="{{error}}">{{error}}</view>
 
   <!-- 空状态 -->
-  <view class="empty" wx:if="{{!loading && !error && shown.length === 0}}">
+  <view class="empty" wx:if="{{!loading && !error && items.length === 0}}">
     <view class="empty-icon">🛡</view>
     <view class="empty-text">该分类下暂无告警记录</view>
   </view>
 
   <!-- ============ 告警卡片 ============ -->
-  <view class="alert-card" wx:for="{{shown}}" wx:key="id">
+  <view class="alert-card" wx:for="{{items}}" wx:key="id">
     <view class="alert-head">
       <view class="alert-left">
-        <view class="alert-dot dot-{{item.state}}"></view>
-        <text class="tag {{item.stateMeta.tag}}">{{item.stateMeta.text}}</text>
+        <view class="alert-dot tone-{{item.tone}}"></view>
+        <text class="pill pill-{{item.tone}}">{{item.stateText}}</text>
       </view>
-      <text class="alert-time">{{item.startedText}}</text>
+      <text class="alert-time">{{item.startedAt}}</text>
     </view>
 
     <view class="evidence">
@@ -42,26 +47,34 @@
       <view class="evidence-grid">
         <view class="evidence-cell">
           <text class="cell-label">气体上升</text>
-          <text class="cell-value">{{item.evidence.gasRise}}<text class="cell-unit">ppm</text></text>
+          <text class="cell-value">{{item.gasAdcRiseText}}<text class="cell-unit">ADC</text></text>
         </view>
         <view class="evidence-cell">
           <text class="cell-label">触发阈值</text>
-          <text class="cell-value">{{item.evidence.gasRiseThreshold}}<text class="cell-unit">ppm</text></text>
+          <text class="cell-value">{{item.gasAdcRiseThresholdText}}<text class="cell-unit">ADC</text></text>
         </view>
         <view class="evidence-cell">
           <text class="cell-label">温升速率</text>
-          <text class="cell-value">{{item.evidence.temperatureRateCPerMinute}}<text class="cell-unit">°C/min</text></text>
+          <text class="cell-value">{{item.temperatureRateText}}</text>
+        </view>
+        <view class="evidence-cell">
+          <text class="cell-label">速率阈值</text>
+          <text class="cell-value">{{item.temperatureRateThresholdText}}</text>
         </view>
         <view class="evidence-cell">
           <text class="cell-label">样本数</text>
-          <text class="cell-value">{{item.evidence.sampleCount}}</text>
+          <text class="cell-value">{{item.sampleCountText}}</text>
+        </view>
+        <view class="evidence-cell">
+          <text class="cell-label">窗口</text>
+          <text class="cell-value">{{item.windowSecondsText}}<text class="cell-unit">s</text></text>
         </view>
       </view>
     </view>
 
-    <view class="alert-foot" wx:if="{{item.ackText || item.endedText}}">
-      <text wx:if="{{item.ackText}}">已确认 {{item.ackText}}</text>
-      <text wx:if="{{item.endedText}}">已恢复 {{item.endedText}}</text>
+    <view class="alert-foot">
+      <text wx:if="{{item.active}}">进行中</text>
+      <text wx:else>结束于 {{item.endedAt}}</text>
     </view>
   </view>
 </view>

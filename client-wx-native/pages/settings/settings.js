@@ -1,136 +1,90 @@
 /**
- * 阈值设置页。
+ * 预警阈值页。
  *
- * 数据源：GET/PUT /api/v1/devices/{id}/thresholds。
- * 契约要点：
- * - temperatureHighC 范围 0-80 °C，gasHighPpm 范围 1-999 ppm；
- * - PUT 返回 202 只表示后端接受命令，设备确认后 confirmationState 才变 confirmed；
- * - 期望版本(desiredVersion)与设备确认版本(confirmedVersion)不一致说明命令还在途中。
+ * 与 KMP 方案对齐（MonitoringClient.loadSettings / updateThresholds / awaitCommandOutcome）：
+ * - 契约要求一次下发三个字段（温度/湿度/气体），界面上湿度不可编辑但必须一起发送；
+ * - 超范围在本地校验并抛出契约范围文案，不发无效请求；
+ * - 入队只代表"后端已接受"，必须轮询 `GET /commands/{requestId}` 观察设备终态，
+ *   且只有 `applied` 才算成功，超时不得提示成功。
  */
-const deviceService = require('../../services/device.js')
-const socket = require('../../services/socket.js')
-const { formatRfc3339 } = require('../../utils/helpers.js')
-
-/** 设备确认状态文案（契约 §8：confirmed | pending | rejected | timed_out） */
-const CONFIRM_TEXT = {
-  confirmed: '设备已确认',
-  pending: '等待设备确认',
-  rejected: '设备已拒绝',
-  timed_out: '确认超时，请重试',
-}
+const monitoring = require('../../services/monitoring.js')
 
 Page({
   data: {
-    loading: true,
+    /** SettingsView（已格式化） */
+    settings: null,
     temperatureHighC: 30,
-    gasHighPpm: 80,
-    desiredVersion: 0,
-    confirmedVersion: 0,
-    confirmationState: 'confirmed',
-    confirmText: '',
-    updatedAt: '',
+    humidityHighRh: 80,
+    gasHighPpm: 20,
+    loading: true,
+    error: '',
     saving: false,
+    commandHint: '',
+    commandTone: 'warning',
   },
 
   onShow() {
     if (typeof this.getTabBar === 'function' && this.getTabBar()) {
       this.getTabBar().setData({ selected: 3 })
     }
-    this.fetch()
-    this.subscribeStream()
+    this.loadSettings()
   },
 
-  onHide() {
-    this.unsubscribeStream()
+  async onPullDownRefresh() {
+    await this.loadSettings()
+    wx.stopPullDownRefresh()
   },
 
-  onUnload() {
-    this.unsubscribeStream()
-  },
-
-  /**
-   * 订阅阈值确认事件：契约 §10 用 thresholds.confirmed / command.status_changed
-   * 通知设备已写入 Flash，比定时轮询更准（不再依赖 setTimeout 猜测）。
-   */
-  subscribeStream() {
-    if (this._offs) return
-    socket.connect('MCU001', { onResync: () => this.fetch() })
-    this._offs = [
-      socket.on('thresholds.confirmed', () => this.fetch()),
-      socket.on('command.status_changed', () => this.fetch()),
-    ]
-  },
-
-  unsubscribeStream() {
-    if (this._offs) {
-      this._offs.forEach((off) => off())
-      this._offs = null
-    }
-  },
-
-  /** 拉取当前阈值与版本信息 */
-  async fetch() {
+  async loadSettings() {
+    this.setData({ loading: true })
     try {
-      const t = await deviceService.getThresholds('MCU001')
+      const view = await monitoring.loadSettings()
       this.setData({
+        settings: view,
+        temperatureHighC: view.temperatureHighC,
+        humidityHighRh: view.humidityHighRh,
+        gasHighPpm: view.gasHighPpm,
         loading: false,
-        temperatureHighC: t.temperatureHighC,
-        gasHighPpm: t.gasHighPpm,
-        desiredVersion: t.desiredVersion,
-        confirmedVersion: t.confirmedVersion,
-        confirmationState: t.confirmationState,
-        confirmText: CONFIRM_TEXT[t.confirmationState] || t.confirmationState,
-        updatedAt: formatRfc3339(t.updatedAt),
+        error: '',
       })
     } catch (e) {
-      this.setData({ loading: false })
-      wx.showToast({ title: (e && e.message) || '加载失败', icon: 'none' })
+      this.setData({ loading: false, error: (e && e.message) || '数据加载失败' })
     }
   },
 
-  onTempChange(e) {
+  onTemp(e) {
     this.setData({ temperatureHighC: e.detail.value })
   },
 
-  onGasChange(e) {
+  onGas(e) {
     this.setData({ gasHighPpm: e.detail.value })
   },
 
-  /**
-   * 保存并下发。客户端先做范围校验减少无效请求，
-   * 服务端仍会以 422 invalid_threshold 兜底。
-   */
   async onSave() {
     if (this.data.saving) return
-    const { temperatureHighC, gasHighPpm } = this.data
-    if (temperatureHighC < 0 || temperatureHighC > 80) {
-      wx.showToast({ title: '温度阈值需在 0-80 °C', icon: 'none' })
-      return
-    }
-    if (gasHighPpm < 1 || gasHighPpm > 999) {
-      wx.showToast({ title: '气体阈值需在 1-999 ppm', icon: 'none' })
-      return
-    }
-    this.setData({ saving: true })
+    this.setData({ saving: true, commandHint: '' })
+    wx.showLoading({ title: '下发中', mask: true })
     try {
-      const res = await deviceService.putThresholds('MCU001', {
-        temperatureHighC: Number(temperatureHighC),
-        gasHighPpm: Number(gasHighPpm),
+      const accepted = await monitoring.updateThresholds({
+        temperatureHighC: Number(this.data.temperatureHighC),
+        humidityHighRh: Number(this.data.humidityHighRh),
+        gasHighPpm: Number(this.data.gasHighPpm),
       })
+      this.setData({ commandHint: accepted.stateText, commandTone: accepted.tone })
+      const outcome = await monitoring.awaitCommandOutcome(accepted.requestId)
       this.setData({
-        desiredVersion: res.desiredVersion,
-        confirmationState: 'pending',
-        confirmText: CONFIRM_TEXT.pending,
+        commandHint: outcome ? outcome.stateText : '等待设备确认',
+        commandTone: outcome ? outcome.tone : 'warning',
       })
-      wx.showToast({ title: '已下发，等待设备确认', icon: 'none' })
-      // 设备确认由 WebSocket thresholds.confirmed 事件驱动；
-      // 这里保留一次延迟兜底，防止事件丢失导致状态长时间停留在 pending
-      setTimeout(() => {
-        if (this.data.confirmationState === 'pending') this.fetch()
-      }, 8000)
+      wx.showToast({
+        title: outcome ? outcome.stateText : '等待设备确认',
+        icon: outcome && outcome.confirmed ? 'success' : 'none',
+      })
+      await this.loadSettings()
     } catch (e) {
       wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
     } finally {
+      wx.hideLoading()
       this.setData({ saving: false })
     }
   },

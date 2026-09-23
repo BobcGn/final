@@ -204,3 +204,64 @@ page {
   font-size: 25rpx;
   color: var(--text-3);
 }
+
+/* ============================================================
+   tone 令牌 -> 宿主配色
+   共享展示层只输出与平台无关的 tone（mint/warning/danger/info），
+   由宿主决定具体颜色；Android 与微信端因此对同一状态给出同一语义、不同主题色。
+   ============================================================ */
+.tone-mint { color: #3fe8c3; }
+.tone-warning { color: #f5c96b; }
+.tone-danger { color: #fb7185; }
+.tone-info { color: #7dd3fc; }
+
+/* 状态点：与文字同语义 */
+.risk-dot.tone-mint,
+.alert-dot.tone-mint {
+  background: #3fe8c3;
+  box-shadow: 0 0 18rpx rgba(63, 232, 195, 0.4);
+}
+.risk-dot.tone-warning,
+.alert-dot.tone-warning {
+  background: #f5c96b;
+  box-shadow: 0 0 18rpx rgba(245, 201, 107, 0.4);
+}
+.risk-dot.tone-danger,
+.alert-dot.tone-danger {
+  background: #fb7185;
+  box-shadow: 0 0 18rpx rgba(251, 113, 133, 0.45);
+}
+.risk-dot.tone-info,
+.alert-dot.tone-info {
+  background: #7dd3fc;
+  box-shadow: 0 0 18rpx rgba(125, 211, 252, 0.4);
+}
+
+/* 胶囊标签 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6rpx 20rpx;
+  border-radius: 999rpx;
+  font-size: 21rpx;
+  line-height: 1.5;
+}
+.pill-mint { background: rgba(63, 232, 195, 0.16); color: #3fe8c3; }
+.pill-warning { background: rgba(245, 201, 107, 0.16); color: #f5c96b; }
+.pill-danger { background: rgba(251, 113, 133, 0.16); color: #fb7185; }
+.pill-info { background: rgba(125, 211, 252, 0.16); color: #7dd3fc; }
+.pill-muted { background: rgba(143, 168, 162, 0.16); color: #8fa8a2; }
+
+/* 控制命令结果提示：拒绝 / 超时 / 已确认必须在视觉上可区分 */
+.command-hint {
+  margin: 20rpx 0 0;
+  padding: 18rpx 24rpx;
+  border-radius: var(--r-md);
+  font-size: 23rpx;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-2);
+}
+.command-hint-mint { background: rgba(63, 232, 195, 0.14); color: #3fe8c3; }
+.command-hint-warning { background: rgba(245, 201, 107, 0.14); color: #f5c96b; }
+.command-hint-danger { background: rgba(251, 113, 133, 0.16); color: #fb7185; }
+.command-hint-info { background: rgba(125, 211, 252, 0.14); color: #7dd3fc; }
