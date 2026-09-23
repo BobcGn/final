@@ -66,10 +66,6 @@
   background: var(--warn);
   box-shadow: 0 0 14rpx rgba(245, 201, 107, 0.45);
 }
-.dot-acknowledged {
-  background: var(--info);
-  box-shadow: 0 0 14rpx rgba(125, 211, 252, 0.45);
-}
 .dot-recovered {
   background: var(--ok);
   box-shadow: 0 0 14rpx var(--glow);
