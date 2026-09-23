@@ -125,7 +125,7 @@ docker compose -f deploy/compose.yaml down
 
 ## 7. 当前已知限制
 
-- 遥测上行与下行控制（远程静音、阈值写入、设备 ACK）均已实机验收通过（2026-09-22，见 `hardware/README.md`「实机闭环验收记录」）；遗留：真实拔电后的阈值保持未验收（只做过复位）。
+- 2026-09-23 的 v2 固件已重新实测遥测上行、阈值写入与设备 ACK：气体阈值 30→80→30 时，`gas_high`/`localAlarm` 随之消失并恢复，命令均为 `applied`，版本升至 10；SWD 读到 PA8/TIM1 通道间歇使能，现场确认蜂鸣器正常发声。人工重新供电/Reset 后新 `bootId` 上报、设备恢复在线，Flash 双槽仍保留 version 10、40/80/30 阈值；Broker 完全停启后同值重发得到 version 11 `applied`/confirmed，当前阈值仍为 40/80/30。远程静音已从 v2 删除；受控写入中断电、拔掉热点后的恢复仍待验收。
 - DHT11 已在实测板持续读数通过；若第 3 页后续出现 `Sensor: F<code>`，按 `hardware/README.md` 的状态码表检查 PA5、上拉电阻、3.3 V/GND 和传感器型号。
 - 提交版默认关闭上电蜂鸣器自检。蜂鸣器不响时先确认 OLED 报警原因包含 `G` 或 `g`；只有气体超限/突增才会让 PA8/TIM1_CH1 间歇输出。需要隔离检查输出链路时，可临时把 `HARDWARE_SELFTEST_ON_BOOT` 置 1，验收后必须恢复为 0。
 - MQ135 ppm 尚未现场标定，验收时应同时观察原始/滤波 ADC。

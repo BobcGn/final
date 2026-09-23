@@ -392,7 +392,7 @@ cmake --build hardware/build/host-tests-coverage
 
 该脚本使用 clang 的 profile 格式与 `llvm-profdata`/`llvm-cov`：macOS 上 clang 写出的文件名是 `<name>.c.gcno`，而 `gcov` 查找 `<name>.gcno`，因此 `--coverage` + gcov 无法读取自己产生的数据。
 
-最新一次本机结果（macOS / Apple clang，2026-09-22）：1214 项断言全部通过；`core/` 聚合 **90% 行覆盖**。本轮修改部分：`core/env_monitor.c` 阈值变更时清除 `previous_causes`，确保新阈值生效后立即重新评估报警并触发蜂鸣器；`STM32_Project1/main.c` 修正 OLED `display.buzzer_active` 状态绑定，展示持续告警态而非 200 ms 瞬时脉冲；删除远程静音能力（`set_mute` 命令、`EnvMonitorSetMuted`、OLED `MUTED` 状态、遥测 `buzzerMuted` 字段）；新增阈值下发立即生效蜂鸣器驱动的回归测试。逐模块数字见脚本输出。
+最新一次本机结果（macOS / Apple clang，2026-09-23）：1224 项断言全部通过；`core/` 聚合 **91% 行覆盖**。Linux GCC 14 使用 `-Wall -Wextra -Werror -Wshadow -Wconversion` 同样 1224 项全部通过。本轮修改部分：`core/env_monitor.c` 阈值变更时清除 `previous_causes`，确保新阈值生效后立即重新评估报警并触发蜂鸣器；`STM32_Project1/main.c` 修正 OLED `display.buzzer_active` 状态绑定，展示持续告警态而非 200 ms 瞬时脉冲；删除远程静音能力；新增阈值下发后立即触发与 Broker 静默重连的回归测试。
 
 **主机测试不能替代实机验证。** 它证明的是判断逻辑本身正确，不能证明 DHT11 时序、MQ135 预热与标定、OLED 刷新、ESP8266 连接或电气连接在现场可用。见下文「已知限制」。
 
@@ -442,6 +442,15 @@ cmake --build hardware/build/host-tests-coverage
 ### 远程静音闭环：已删除（2026-09-22）
 
 远程静音能力已从 Hardware、Backend、KMP 和微信客户端全部移除。旧客户端发送 `set_mute` 命令会被设备明确拒绝（`bad_request_type`），不会静默执行。本地蜂鸣器报警仅由设备自身的气体报警逻辑控制。
+
+### v2 实机复核（2026-09-23）
+
+- `cmake --preset release --fresh && cmake --build --preset release` 成功，Arm GNU 15.3.1 零 warning；OpenOCD `program … verify reset` 返回 `Verified OK`。烧录前的完整 64 KiB Flash 只读备份在 `/tmp/final-pre-v2-flash-20260923.bin`（临时文件，不纳入仓库）。
+- 同一手机热点下，`MCU001` 经 EMQX → Go Backend → `postgres-dev` 持续上报；REST 返回温湿度、气体与 `gas_high`，不再含 `buzzerMuted`。旧 `POST /commands/mute` 返回 404。
+- 原阈值 40/80/30（温度/湿度/气体）：气体约 45–49 ppm，`gas_high`/`localAlarm=true`。下发 40/80/80 后命令 `applied`、版本 9 confirmed，`localAlarm=false`；恢复 40/80/30 后命令 `applied`、版本 10 confirmed，`gas_high`/`localAlarm=true`。这验证了动态阈值变化会重新评估报警，且未留下临时测试阈值。
+- 气体报警时 SWD 读到 TIM1 CCER 先为 1、后为 0；PSC=7、ARR=499，在 8 MHz HSI 下为 2 kHz。现场人员确认蜂鸣器正常发声。节奏仍按主循环节拍，不承诺严格的 200/800 ms 壁钟时长。
+- 首轮完全停止/启动 EMQX 后出现 ESP8266 保留陈旧 TCP 标志、设备不上报的缺陷；新增发送失败显式关链与 MQTT 握手/收包静默超时（10/45 s）后重新烧录。随后 `docker compose restart emqx` 和“完全停止 15 s 再启动”均见 `MCU001` 与 Backend 自动重新连接，REST 恢复 online，未手动复位。恢复后再下发相同 40/80/30，设备 ACK `applied`、版本 11 confirmed，验证 Go 下行发布也恢复。
+- 用户人工重新连接供电并按 Reset 后，新的 `bootId` 重新上报、阈值版本保持 10；SWD 直读 `0x0800F800` 为 schema 1/version 10/40/80/30，`0x0800FC00` 为上一条 version 9/40/80/80，证明双槽 Flash 保持。此操作不等于受控写入中途断电故障注入；拔掉手机热点后的恢复也尚未测。
 
 ### 接收丢帧计数：无丢帧
 
@@ -559,7 +568,7 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 - `device/control` 的 PUBLISH 已接入阈值命令解析、Flash 持久化与 `device/command-ack`；旧版控制闭环已有实机记录，移除静音后的固件需要重新验收。
 - 仍待处理：蜂鸣器音量偏弱；发声节奏是每 10 个节拍响 2 个的比例，网络等待可能拉长单次鸣响。Backend 的历史 MQTT 会话断连问题已在 PR #21 修复。
 - DHT11、OLED、MQ135、LED/蜂鸣器输出链路与 MQTT 遥测落库已通过实机验收。
-- 设备协议已冻结为 v1.0.0（`../docs/device-protocol.md`）：含 `schemaVersion`、字段/单位表、错误码与变更流程。鉴权、TLS 与更严格的 Broker 边界仍属部署期工作（见 `../docs/integration-testing.md` §8）；协议后续变化必须走 §9 变更流程，同时记录并协调 Hardware 与 Backend。
+- 设备协议当前为 v2.0.0（`../docs/device-protocol.md`，删除远程静音；报文 `schemaVersion` 仍为 1）：含字段/单位表、错误码与变更流程。鉴权、TLS 与更严格的 Broker 边界仍属部署期工作（见 `../docs/integration-testing.md` §8）；协议后续变化必须走 §9 变更流程，同时记录并协调 Hardware 与 Backend。
 - 实机/烧录验收已有可重复记录（「实机闭环验收记录」，2026-09-22）；自动化硬件测试仍缺——主机测试不能替代 HIL，后续需补可重复的自动化烧录与验收脚本。
 
 ### Known Risks / Environment Dependencies

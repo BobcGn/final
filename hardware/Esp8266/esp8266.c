@@ -329,6 +329,7 @@ uint8_t ESP8266_SendBytes(const uint8_t *payload, uint16_t payloadLength) {
 
   ESP8266_SendCommand(command);
   if (ESP8266_WaitFor(">", 0, 2000U) == 0U) {
+    ESP8266_ResetTcp();
     return 0U;
   }
 
@@ -339,7 +340,11 @@ uint8_t ESP8266_SendBytes(const uint8_t *payload, uint16_t payloadLength) {
       ESP8266_SendByte(payload[index]);
     }
   }
-  return ESP8266_WaitFor("SEND OK", 0, 3000U);
+  if (ESP8266_WaitFor("SEND OK", 0, 3000U) == 0U) {
+    ESP8266_ResetTcp();
+    return 0U;
+  }
+  return 1U;
 }
 
 static uint8_t ESP8266_SendPayload(const char *payload) {
@@ -455,6 +460,18 @@ uint8_t ESP8266_Init(void) {
 uint8_t ESP8266_IsWifiConnected(void) { return s_wifiConnected; }
 
 uint8_t ESP8266_IsTcpConnected(void) { return s_tcpConnected; }
+
+void ESP8266_ResetTcp(void) {
+  /* CIPSEND can fail while the module still reports the previous socket as
+   * connected. Closing it explicitly prevents CIPSTART from accepting that
+   * stale socket as ALREADY CONNECTED after a Broker restart. */
+  s_tcpConnected = 0U;
+  s_registered = 0U;
+  if (s_wifiConnected != 0U) {
+    ESP8266_SendCommand("AT+CIPCLOSE");
+    (void)ESP8266_WaitFor("OK", "ERROR", 1000U);
+  }
+}
 
 uint8_t ESP8266_OpenTcp(void) {
   char command[ESP8266_COMMAND_BUFFER_SIZE];

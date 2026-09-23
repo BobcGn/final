@@ -504,6 +504,37 @@ static void test_error_and_send_failures(void)
     CHECK_FALSE(SessionDispatchFrame(&fix.dispatcher, &packet, &outcome, (const uint8_t *)"hello"));
 }
 
+static void test_broker_silence_requires_reconnect(void)
+{
+    SessionFixture fix;
+
+    TEST_CASE("offline link never triggers a forced TCP reconnect");
+    fixture_setup(&fix);
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 60000U));
+    CHECK_FALSE(SessionDispatchNeedsReconnect(NULL, 60000U));
+
+    TEST_CASE("CONNECT and SUBSCRIBE handshakes time out at ten seconds");
+    fix.dispatcher.state = MQTT_LINK_WAIT_CONNACK;
+    fix.dispatcher.last_rx_ms = 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 10999U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 11000U));
+    fix.dispatcher.state = MQTT_LINK_WAIT_SUBACK;
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 11000U));
+
+    TEST_CASE("online link requires a broker frame within forty-five seconds");
+    fix.dispatcher.state = MQTT_LINK_ONLINE;
+    fix.dispatcher.last_rx_ms = 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 45999U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 46000U));
+    fix.dispatcher.last_rx_ms = 45500U; /* PUBACK or PINGRESP received */
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 46000U));
+
+    TEST_CASE("timeout comparison remains valid across millisecond counter wrap");
+    fix.dispatcher.last_rx_ms = UINT32_MAX - 1000U;
+    CHECK_FALSE(SessionDispatchNeedsReconnect(&fix.dispatcher, 43998U));
+    CHECK_TRUE(SessionDispatchNeedsReconnect(&fix.dispatcher, 43999U));
+}
+
 /* Entry point for the session_dispatch suite. */
 void test_session_dispatch_suite(void)
 {
@@ -512,4 +543,5 @@ void test_session_dispatch_suite(void)
     test_tcp_disconnect_behavior();
     test_connack_and_pingresp();
     test_error_and_send_failures();
+    test_broker_silence_requires_reconnect();
 }

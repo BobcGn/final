@@ -317,6 +317,16 @@ int main(void)
             telemetrySequence = ControlLinkSequence(&controlLink);
         }
 
+        /* ESP8266 can retain a stale TCP-connected flag when EMQX restarts.
+         * Broker silence is detected independently of successful local sends,
+         * so a socket that says SEND OK but receives no PUBACK is reopened. */
+        if (ESP8266_IsTcpConnected() != 0U &&
+            SessionDispatchNeedsReconnect(&sessionDispatcher, now_ms))
+        {
+            ESP8266_ResetTcp();
+            SessionDispatchTcpDisconnected(&sessionDispatcher);
+        }
+
         /* If TCP dropped during packet handling or send, drop to offline immediately. */
         if (ESP8266_IsTcpConnected() == 0U)
         {
@@ -339,6 +349,7 @@ int main(void)
                 {
                     sessionDispatcher.state = MQTT_LINK_WAIT_CONNACK;
                     sessionDispatcher.last_activity_ms = now_ms;
+                    sessionDispatcher.last_rx_ms = now_ms;
                 }
             }
             else if (sessionDispatcher.state == MQTT_LINK_ONLINE)

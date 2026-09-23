@@ -75,6 +75,8 @@ uint8_t ESP8266_Task(void);
 uint8_t ESP8266_IsWifiConnected(void);
 uint8_t ESP8266_IsTcpConnected(void);
 uint8_t ESP8266_OpenTcp(void);
+/* Force-close a stale TCP socket before starting a new MQTT handshake. */
+void ESP8266_ResetTcp(void);
 uint8_t ESP8266_SendBytes(const uint8_t *payload, uint16_t length);
 uint8_t ESP8266_GetPacket(uint8_t *buffer, uint16_t capacity, uint16_t *length);
 /* Report the receive losses accumulated since reset. */

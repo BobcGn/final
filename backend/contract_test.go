@@ -465,8 +465,8 @@ func TestContractVersionIsFrozen(t *testing.T) {
 	if strings.Contains(text, "draft") {
 		t.Fatalf("info.version is %q; the contract is implemented and must not be published as a draft", text)
 	}
-	if !strings.HasPrefix(text, "1.") {
-		t.Fatalf("info.version is %q, want a 1.x version matching the frozen device schema", text)
+	if !strings.HasPrefix(text, "2.") {
+		t.Fatalf("info.version is %q, want a 2.x version after removal of remote mute", text)
 	}
 }
 

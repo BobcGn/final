@@ -1,6 +1,6 @@
 # Backend API Detailed Contract
 
-状态：`v1.0.0`（已冻结，与 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml) 同步）。本文是 Go Backend 的开发者接口说明；机器可读事实源是 OpenAPI 文件。
+状态：`v2.0.0`（已冻结，与 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml) 同步；远程静音已删除）。本文是 Go Backend 的开发者接口说明；机器可读事实源是 OpenAPI 文件。
 
 **当前实现状态**：`/healthz` 与全部 `/api/v1` 路由、`/ws/v1` 实时流均已实现。数据来自 MQTT 接入的设备遥测；未配置 `MQTT_BROKER_URL` 时进程仍可启动，但没有设备数据，控制命令会返回 `503 broker_unavailable`。
 

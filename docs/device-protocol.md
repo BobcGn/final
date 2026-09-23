@@ -4,7 +4,7 @@
 
 **v1.0.0 → v2.0.0 迁移说明**：远程静音能力已从 Hardware、Backend、KMP 和微信客户端全部移除。MQTT `device/control` 主题现在只接受 `set_thresholds` 命令；旧的 `set_mute` 命令会被设备明确拒绝（`bad_request_type`）。遥测中的 `buzzerMuted` 字段已删除。本地蜂鸣器报警仅由设备自身的气体报警逻辑（`gas_high` / `rapid_gas_rise`）控制，服务器和客户端无权远程静音。调用已删除的 `POST .../commands/mute` REST 端点将收到标准 404。
 
-本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件已使用 ESP8266 TCP 透传 MQTT 3.1.1。2026-09-22 已实机验证 CONNECT、SUBSCRIBE、QoS 1 遥测及旧版控制闭环；移除静音后的 v2.0.0 固件仍须重新实机验收，证据与边界见 `hardware/README.md`。
+本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件已使用 ESP8266 TCP 透传 MQTT 3.1.1。2026-09-23 已重新实机验证 v2.0.0 的 CONNECT、SUBSCRIBE、QoS 1 遥测、阈值下发/ACK、Broker 停启后自动重连和气体阈值驱动蜂鸣器；证据与边界见 `hardware/README.md`。
 
 ## 1. Transport
 
@@ -244,7 +244,7 @@ ESP8266 驱动（`hardware/Esp8266/esp8266.c`）只有一个 TCP 接收缓冲、
 
 `errorCode` 枚举（冻结）：`schema_unsupported`、`device_mismatch`、`bad_request_type`、`out_of_range`、`stale_version`、`flash_write_failed`、`flash_verify_failed`。
 
-`thresholdVersion`：仅 `set_thresholds` 且结果为 `applied`/`duplicate` 时给出设备当前生效版本；其余情况（含其他结果与所有 `set_mute` 回执）为 `null`。
+`thresholdVersion`：仅 `set_thresholds` 且结果为 `applied`/`duplicate` 时给出设备当前生效版本；其余结果为 `null`。已废弃的 `set_mute` 会被拒绝，不产生版本。
 
 REST 控制接口返回 202 只表示命令已被 Backend 接受并进入发布流程，**不代表设备已执行**。客户端必须等待 ACK 或超时结果。
 
@@ -262,7 +262,7 @@ APP001|<temperature>|<humidity>|<gasPpm>
 迁移规则（冻结）：
 
 1. 主循环已停止调用旧 `APP001` 文本帧任务，改为 CONNECT → SUBSCRIBE → PUBLISH/PING 状态机。
-2. 2026-09-21 实机验证已覆盖冷启动、手机热点、EMQX 连接、QoS 1 遥测上报、Go 消费与 PostgreSQL 落库。2026-09-22 修复后，控制闭环已实机验收通过：PUBACK、`device/command-ack`（`applied`）、远程静音/解除、阈值下发与复位保持、断网自治与重启 EMQX 后自行重连（证据见 `hardware/README.md`「实机闭环验收记录」）。仍未覆盖：真实拔电后的阈值保持（本轮以复位代替）、Broker 重启后 Backend 侧控制命令发布的独立缺陷（Backend 模块，另立分支）。
+2. 2026-09-23 的 v2 固件已在手机热点下复测 EMQX → Go → PostgreSQL 链路、`set_thresholds` ACK、Broker 停启后自动重连、气体阈值 30→80→30 对 `gas_high` 与蜂鸣器的影响，以及人工重新供电/Reset 后的 Flash version 10 保持。2026-09-22 的 v1 固件曾实测远程静音/解除；此能力已于 v2 删除，不能把历史结果当作当前功能。尚未进行受控掉电时刻注入与拔掉热点 AP 的测试。
 3. 禁止在同一次未经验证的修改中同时迁移 HAL、重写传感器驱动并切换 MQTT。
 4. 迁移期间字段映射：文本帧的 `<temperature>` → `temperatureC`（整数部分）、`<humidity>` → `humidityRh`、`<gasPpm>` → `gasPpm`；文本帧缺少的 `bootId`、`sequence`、`gasAdcRaw`、`gasAdcFiltered`、`thresholdVersion` 等字段必须在 MQTT 路径中补齐，不能靠 Backend 猜测。
 

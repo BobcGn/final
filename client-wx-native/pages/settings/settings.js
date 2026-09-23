@@ -23,6 +23,7 @@ Page({
   data: {
     loading: true,
     temperatureHighC: 30,
+    humidityHighRh: 80,
     gasHighPpm: 80,
     desiredVersion: 0,
     confirmedVersion: 0,
@@ -75,6 +76,7 @@ Page({
       this.setData({
         loading: false,
         temperatureHighC: t.temperatureHighC,
+        humidityHighRh: t.humidityHighRh,
         gasHighPpm: t.gasHighPpm,
         desiredVersion: t.desiredVersion,
         confirmedVersion: t.confirmedVersion,
@@ -102,7 +104,7 @@ Page({
    */
   async onSave() {
     if (this.data.saving) return
-    const { temperatureHighC, gasHighPpm } = this.data
+    const { temperatureHighC, humidityHighRh, gasHighPpm } = this.data
     if (temperatureHighC < 0 || temperatureHighC > 80) {
       wx.showToast({ title: '温度阈值需在 0-80 °C', icon: 'none' })
       return
@@ -115,6 +117,9 @@ Page({
     try {
       const res = await deviceService.putThresholds('MCU001', {
         temperatureHighC: Number(temperatureHighC),
+        // The backend requires the complete threshold set even though this page
+        // currently exposes only temperature and gas sliders.
+        humidityHighRh: Number(humidityHighRh),
         gasHighPpm: Number(gasHighPpm),
       })
       this.setData({
