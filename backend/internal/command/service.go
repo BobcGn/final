@@ -102,6 +102,14 @@ func (s *Service) TTL() time.Duration { return s.ttl }
 // RequestThresholdUpdate validates a threshold request, mints the next version
 // and publishes a set_thresholds command. It returns the accepted command; the
 // caller must still wait for the device acknowledgement.
+//
+// Design Rationale:
+//  1. Two-Phase Asynchronous Control: HTTP 202 Accepted only asserts that the command
+//     has been persisted and delivered to the MQTT Broker. Device execution is confirmed
+//     only after hardware verifies its Flash write and reports applied over device/command-ack.
+//  2. Strict Idempotency: Repeating the same Idempotency-Key with identical parameters
+//     safely returns the existing command without re-publishing. Tampered parameters with
+//     the same key return 409 Conflict.
 func (s *Service) RequestThresholdUpdate(ctx context.Context, deviceID string, desired domain.Thresholds, idempotencyKey, actor string) (domain.Command, error) {
 	if err := domain.ValidateDeviceID(deviceID); err != nil {
 		return domain.Command{}, err

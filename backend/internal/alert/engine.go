@@ -267,6 +267,13 @@ func (e *Engine) applyRecovery(window *deviceWindow, input Input, eventTime time
 
 // measure computes the rise and slope evidence for the current window. It
 // reports false when the window is too small to describe a trend at all.
+//
+// Design Rationale:
+//  1. Gas baseline uses the median of the earliest window segment (len/3) rather than
+//     a simple average to stay immune to solitary outlier spikes (e.g. temporary
+//     chemical solvent bottle opening).
+//  2. Gas difference is evaluated in 12-bit ADC raw codes (0..4095) rather than uncalibrated
+//     ppm estimates to eliminate sensor calibration drift.
 func (e *Engine) measure(window *deviceWindow) (domain.AlertEvidence, bool) {
 	samples := window.samples
 	if len(samples) < MinBaselineSamples+1 {
@@ -349,6 +356,12 @@ func median(values []int) int {
 // temperatureSlopeCPerMinute fits a least-squares line through the window and
 // returns its slope scaled to one minute. It returns 0 for fewer than two
 // distinct timestamps, where a slope is undefined.
+//
+// Design Rationale:
+// DHT11 sensor readings have a ±0.5°C quantization step. Calculating temperature
+// derivative from adjacent two-point delta (ΔT/Δt) introduces severe high-frequency
+// noise. Ordinary Least Squares (OLS) regression over the full sliding window
+// acts as a low-pass filter, yielding a robust physical rate of rise (slope * 60).
 func temperatureSlopeCPerMinute(samples []domain.Telemetry) float64 {
 	if len(samples) < 2 {
 		return 0

@@ -41,7 +41,7 @@ func run() error {
 	deviceID := flag.String("device", "MCU001", "device identifier; also the MQTT client identifier")
 	bootID := flag.String("boot", "sim0001", "boot identifier, unique per power cycle")
 	interval := flag.Duration("interval", DefaultReportInterval, "telemetry report period")
-	scenarioName := flag.String("scenario", "quiet", "quiet, gas-surge, or warm-up")
+	scenarioName := flag.String("scenario", "quiet", "quiet, gas-surge, warm-up, or fire-alarm")
 	duplicateEvery := flag.Int("duplicate-every", 0, "republish every Nth sample, to exercise the dedup key")
 	skipEvery := flag.Int("skip-every", 0, "drop every Nth sample, leaving a gap in the stream")
 	unsyncedClock := flag.Bool("unsynced-clock", false, "publish a null timestamp, as an unsynced device does")
@@ -118,8 +118,41 @@ func scenarioFor(name string) (func(int) Sample, error) {
 			}
 			return sample
 		}, nil
+	case "fire-alarm":
+		// Simulates a realistic early fire outbreak:
+		// - Steps 0..3: quiet ambient baseline (~25°C, ~1000 ADC)
+		// - Steps 4..15: sudden fire event, rapid gas surge (+400 ADC) and steep
+		//   temperature climb (>3°C/min), triggering the composite fire_warning rule
+		// - Steps 16+: cooldown and gradual recovery back to safe levels
+		return func(step int) Sample {
+			sample := QuietSample()
+			switch {
+			case step < 4:
+				return sample
+			case step < 16:
+				fireStep := step - 4
+				sample.TemperatureC = 25.0 + float64(fireStep)*0.6
+				sample.GasAdcFiltered = 1000 + 350 + fireStep*30
+				sample.GasAdcRaw = sample.GasAdcFiltered
+				gas := 50.0 + float64(fireStep)*10
+				sample.GasPpm = &gas
+				sample.LocalAlarm = true
+				sample.AlarmCauses = []domain.AlarmCause{domain.AlarmRapidTemperatureRise, domain.AlarmRapidGasRise}
+				return sample
+			default:
+				coolStep := step - 16
+				temp := 32.2 - float64(coolStep)*0.8
+				if temp < 25.0 {
+					temp = 25.0
+				}
+				sample.TemperatureC = temp
+				sample.GasAdcFiltered = 1050
+				sample.GasAdcRaw = 1050
+				return sample
+			}
+		}, nil
 	default:
-		return nil, fmt.Errorf("unknown scenario %q; expected quiet, gas-surge or warm-up", name)
+		return nil, fmt.Errorf("unknown scenario %q; expected quiet, gas-surge, warm-up, or fire-alarm", name)
 	}
 }
 
