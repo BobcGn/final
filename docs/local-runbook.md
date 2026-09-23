@@ -5,7 +5,7 @@
 ## 1. 前置条件
 
 - Docker Desktop 或 OrbStack，并已存在 `postgres-dev` 容器。
-- Go 1.25+、CMake 3.20+、GNU Make 和 Arm GNU Toolchain。
+- Go 1.27.1、CMake 3.20+、GNU Make 和 Arm GNU Toolchain。
 - ST-LINK 与 STM32F103C8T6 已通过 SWD 连接。
 - ESP8266 与运行 EMQX 的电脑处于同一 Wi-Fi/手机热点。
 

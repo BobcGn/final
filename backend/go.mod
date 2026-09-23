@@ -1,6 +1,8 @@
 module github.com/BobcGn/final/backend
 
-go 1.25.0
+go 1.27.0
+
+toolchain go1.27.1
 
 require (
 	github.com/gorilla/websocket v1.5.3
